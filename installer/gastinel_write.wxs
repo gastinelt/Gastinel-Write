@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
+     xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
+
+    <Product Id="*"
+           Name="Gastinel Write"
+           Language="1036"
+           Version="1.0.2.0"
+           Manufacturer="Gastinel"
+           UpgradeCode="93A6F4E8-7D9A-4E38-9B7C-5F775B837E10">
+
+    <Package InstallerVersion="500"
+             Compressed="yes"
+             InstallScope="perMachine"
+             Platform="x64"
+             Description="Installeur pour Gastinel Write"
+             Comments="L'écriture, sans fard." />
+
+    <MajorUpgrade DowngradeErrorMessage="Une version plus récente de Gastinel Write est déjà installée." />
+
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Icon Id="AppIcon.ico" SourceFile="$(var.SourceDir)\assets\branding\app.ico" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon.ico" />
+    <Property Id="ARPHELPLINK" Value="https://gastinel.org" />
+    <Property Id="ARPNOREPAIR" Value="yes" Secure="yes" />
+
+    <!-- Structure des Répertoires d'Installation -->
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="GastinelCompanyFolder" Name="Gastinel">
+          <Directory Id="INSTALLDIR" Name="Write">
+            <Directory Id="AssetsFolder" Name="assets">
+              <Directory Id="BrandingFolder" Name="branding" />
+              <Directory Id="AppFontsFolder" Name="fonts">
+                <Directory Id="AppCustomFontsFolder" Name="custom" />
+              </Directory>
+            </Directory>
+          </Directory>
+        </Directory>
+      </Directory>
+
+      <!-- Raccourcis Menu Démarrer et Bureau -->
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="ApplicationProgramsFolder" Name="Gastinel Write" />
+      </Directory>
+      <Directory Id="DesktopFolder" Name="Desktop" />
+    </Directory>
+
+    <!-- Composants -->
+    <DirectoryRef Id="INSTALLDIR">
+      <Component Id="MainExecutable" Guid="C4D2833F-E138-4C8E-9801-7F89DCBA1001" Win64="yes">
+        <File Id="GastinelWriteExe"
+              Source="$(var.SourceDir)\build\gastinel_write.exe"
+              KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <DirectoryRef Id="BrandingFolder">
+      <Component Id="BrandingAssets" Guid="C4D2833F-E138-4C8E-9801-7F89DCBA1002" Win64="yes">
+        <File Id="IconeWriteB" Source="$(var.SourceDir)\assets\branding\icone_write_b.png" KeyPath="yes" />
+        <File Id="IconeWriteW" Source="$(var.SourceDir)\assets\branding\icone_write_w.png" />
+        <File Id="AppIcoFile" Source="$(var.SourceDir)\assets\branding\app.ico" />
+      </Component>
+    </DirectoryRef>
+
+    <DirectoryRef Id="AppFontsFolder">
+      <Component Id="FontAssets" Guid="C4D2833F-E138-4C8E-9801-7F89DCBA1003" Win64="yes">
+        <File Id="InterRegular" Source="$(var.SourceDir)\assets\fonts\Inter-Regular.ttf" KeyPath="yes" />
+        <File Id="InterSemiBold" Source="$(var.SourceDir)\assets\fonts\Inter-SemiBold.ttf" />
+        <File Id="FontLicense" Source="$(var.SourceDir)\assets\fonts\LICENSE.txt" />
+      </Component>
+    </DirectoryRef>
+
+    <DirectoryRef Id="AppCustomFontsFolder">
+      <Component Id="CustomFontsDirComponent" Guid="C4D2833F-E138-4C8E-9801-7F89DCBA1004" Win64="yes">
+        <CreateFolder>
+          <util:PermissionEx User="Users" GenericAll="yes" />
+        </CreateFolder>
+      </Component>
+    </DirectoryRef>
+
+    <DirectoryRef Id="ApplicationProgramsFolder">
+      <Component Id="ApplicationShortcutComponent" Guid="C4D2833F-E138-4C8E-9801-7F89DCBA1005" Win64="yes">
+        <Shortcut Id="StartMenuShortcut"
+                  Name="Gastinel Write"
+                  Description="Éditeur de texte épuré et ultra-rapide"
+                  Target="[INSTALLDIR]gastinel_write.exe"
+                  WorkingDirectory="INSTALLDIR"
+                  Icon="AppIcon.ico" />
+        <Shortcut Id="DesktopShortcut"
+                  Directory="DesktopFolder"
+                  Name="Gastinel Write"
+                  Description="Éditeur de texte épuré et ultra-rapide"
+                  Target="[INSTALLDIR]gastinel_write.exe"
+                  WorkingDirectory="INSTALLDIR"
+                  Icon="AppIcon.ico" />
+        <RemoveFolder Id="CleanUpShortCut" On="uninstall" />
+        <RegistryValue Root="HKCU" Key="Software\Gastinel\Write" Name="installed" Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <!-- Fonctionnalités -->
+    <Feature Id="MainApplication" Title="Gastinel Write" Level="1">
+      <ComponentRef Id="MainExecutable" />
+      <ComponentRef Id="BrandingAssets" />
+      <ComponentRef Id="FontAssets" />
+      <ComponentRef Id="CustomFontsDirComponent" />
+      <ComponentRef Id="ApplicationShortcutComponent" />
+    </Feature>
+
+    <!-- Interface utilisateur d'installation -->
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLDIR" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.SourceDir)\installer\license.rtf" />
+    <UIRef Id="WixUI_InstallDir" />
+    <UIRef Id="WixUI_ErrorProgressText" />
+
+  </Product>
+</Wix>

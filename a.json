@@ -1,0 +1,80 @@
+3.
+# Fiche de travail — Portage Linux (Gastinelle Write)
+
+**⚠️ CE N'EST PAS UN PROMPT PRÊT À LANCER.**
+Ceci est une fiche de préparation à garder de côté. À transformer en prompt Claude Code réel une fois que le socle Windows (paramètres, éditeur formaté, mode clavier-first) sera stabilisé — porter maintenant reviendrait à porter du code qui va encore bouger.
+
+## Pourquoi attendre
+
+Le chrome custom, le splash, l'accueil et bientôt l'éditeur formaté sont en plein développement actif côté Windows. Un portage Linux lancé maintenant devrait être refait à chaque changement de fonctionnalité côté Windows — double travail, ou pire, divergence entre les deux versions.
+
+## Ce qui devra être traité quand ce sera le moment
+
+### Ce qui porte déjà bien (peu ou pas de changement attendu)
+- Le rasterizer de texte, le parser TTF, l'atlas de glyphes : logique pure C++, indépendante de l'OS.
+- Le pipeline `TTF → contours → rasterizer → atlas → framebuffer` : le framebuffer final est juste des pixels, transposable.
+- La logique `doc/` (lecture/écriture `.txt`/`.odt`) : I/O fichier standard, portable avec des ajustements mineurs (séparateurs de chemin, fins de ligne par défaut — LF plutôt que CRLF sous Linux, à décider si on garde CRLF partout ou si on adapte par OS).
+
+### Ce qui doit être entièrement réécrit (spécifique Win32)
+- **Fenêtrage** : tout `CreateWindowEx`/boucle de messages Win32 → à remplacer par X11 ou Wayland (arbitrage à faire : X11 seul pour la compatibilité large, ou les deux avec abstraction — Wayland impose des mécanismes différents pour le chrome custom, notamment pas de déplacement de fenêtre par le client de la même façon).
+- **Chrome custom (barre de titre, drag, resize, boutons)** : toute la mécanique `WM_NCHITTEST`/`WM_NCCALCSIZE` est propre à Win32. Sous Linux, la gestion des décorations côté client (CSD) varie selon l'environnement de bureau (GNOME, KDE, etc.) — certains gestionnaires de fenêtres n'apprécient pas les fenêtres sans décoration système. À étudier avant d'écrire le prompt : quel comportement minimum viable viser (probablement X11 avec `_MOTIF_WM_HINTS` pour désactiver la décoration, et réimplémenter drag/resize soi-même comme sous Windows).
+- **Contexte graphique** : WGL → GLX (ou EGL) pour OpenGL sous Linux. Fallback GDI n'a pas d'équivalent direct — à redéfinir (peut-être un fallback logiciel via Xlib/framebuffer direct, à spécifier).
+- **Boîtes de dialogue fichier** (`GetOpenFileName`) : pas d'équivalent Win32 sous Linux — passer par un portail freedesktop (`xdg-desktop-portal`) ou une implémentation maison minimale, à trancher.
+- **Persistance** (`%APPDATA%\...`) : équivalent Linux = `$XDG_CONFIG_HOME` ou `~/.config/gastinel/write/`, format de fichier inchangé.
+- **GDI+ (décodage PNG)** : n'existe pas sous Linux — soit écrire un décodeur PNG minimal maison (l'inflate DEFLATE déjà évoqué comme option non retenue côté Windows redeviendrait pertinent ici), soit utiliser une lib système standard Linux (`libpng`, à valider si ça respecte l'esprit "pas de dépendance tierce" du projet — c'est une lib système sur la plupart des distributions, à documenter comme équivalent de GDI+ si retenu).
+
+## Questions à trancher avant d'écrire le vrai prompt
+
+- X11 uniquement, ou X11 + Wayland dès le départ ?
+- Quelle distribution/environnement de bureau sert de référence pour les tests (à défaut de toutes les tester) ?
+- CRLF partout (cohérence fichiers cross-plateforme) ou adaptation par OS ?
+- Décodage PNG : lib système Linux équivalente à GDI+, ou décodeur maison ?
+
+
+
+4.
+# Fiche de travail — Support Windows 7 / Windows 8 (Gastinelle Write)
+
+**⚠️ CE N'EST PAS UN PROMPT PRÊT À LANCER.**
+Ceci est une fiche de préparation à garder de côté. À transformer en prompt Claude Code réel une fois le socle Windows 10/11 stabilisé.
+
+## Pourquoi attendre
+
+Même raison que pour Linux : le code bouge encore activement sur la cible principale (Win10/11). Généraliser vers du rétro-compatible maintenant, c'est generaliser une base instable.
+
+## Ce qui va probablement casser sur Win7/8
+
+- **`DWMWCP_DONOTROUND` / coins carrés Win11** : cette API n'existe pas sur Win7/8 — la constante et l'appel devront être conditionnés (détection de version à l'exécution, `IsWindows10OrGreater()` ou équivalent, plutôt qu'une compilation conditionnelle qui figerait un seul binaire par OS — le projet vise un seul binaire multi-versions).
+- **Aero Snap** : présent depuis Windows 7 en fait (introduit avec Win7), donc probablement OK, mais le comportement du DWM diffère — à retester spécifiquement, ne pas supposer que ce qui marche sous Win11 marche identiquement sous Win7.
+- **GDI+ pour le décodage PNG** : disponible depuis longtemps sous Windows (XP SP2+), donc a priori OK sans changement — à confirmer.
+- **OpenGL/WGL** : le contexte de base doit fonctionner, mais les pilotes graphiques Win7/8 sont souvent plus anciens/limités — le fallback GDI existant devient plus important ici, pas juste un filet de sécurité pour machines exotiques.
+- **DPI awareness** : la gestion DPI par moniteur (déjà notée comme non gérée même sous Win10/11) est encore plus disparate sous Win7/8 (pas de DPI par moniteur du tout avant Win8.1) — probablement pas un problème nouveau, juste un problème existant qui devient plus visible.
+- **Style de fenêtre sans chrome** (`WM_NCCALCSIZE` renvoyant 0) : la technique devrait fonctionner sous Win7/8 (c'est une technique ancienne, pas une nouveauté Win10/11), mais le rendu visuel du thème Aero sous-jacent diffère — à vérifier que rien ne bug visuellement en arrière-plan de la fenêtre custom.
+
+## Questions à trancher avant d'écrire le vrai prompt
+
+- Détection de version : à l'exécution (un seul binaire qui s'adapte) ou compilation conditionnelle (plusieurs binaires) ? Le principe déjà établi pour le fallback OpenGL/GDI (détection runtime, un seul binaire) suggère de rester cohérent et de faire pareil ici.
+- A-t-on accès à une VM Win7/8 pour tester réellement, ou seulement une adaptation "à l'aveugle" basée sur la documentation Microsoft ? Le rapport précédent a bien montré l'importance de "vérifié par mesure, pas à l'œil" — ce principe doit s'appliquer ici aussi, donc prévoir l'environnement de test avant de lancer le prompt.
+
+
+
+
+5.
+# Fiche de travail — Support Windows Vista / Windows XP (Gastinelle Write)
+
+**⚠️ CE N'EST PAS UN PROMPT PRÊT À LANCER.**
+Ceci est une fiche de préparation à garder de côté. Objectif le plus lointain de la feuille de route plateforme — à traiter après Win7/8, et seulement si le projet est encore actif et que la demande réelle le justifie (à questionner : qui utilise encore XP en 2026-2027 pour de la bureautique ? Vaut le coup d'être posé avant d'investir du temps dessus, même si l'ambition "tourne sur n'importe quoi" reste valide en principe).
+
+## Ce qui va probablement poser problème (au-delà de ce qui casse déjà sous Win7/8)
+
+- **Chrome custom sans bordure** : la technique `WM_NCCALCSIZE` renvoyant 0 existe depuis longtemps, mais le rendu du thème sous XP (Luna/thèmes classiques, pas de DWM du tout — le Desktop Window Manager n'existe pas avant Vista) change fondamentalement la donne. Sous XP, il n'y a pas de composition DWM : le double buffering et la transparence éventuelle devront être gérés entièrement à la main.
+- **OpenGL** : les versions de pilotes disponibles sous XP sont très variables et souvent anciennes (OpenGL 1.1-2.1 typique sans mise à jour). Le choix déjà fait d'OpenGL 1.1 strict (pas de shader, pas de VBO) est en réalité un excellent point de départ pour cette cible — bonne nouvelle, décision prise tôt qui paie ici. Mais le fallback GDI devient quasi obligatoire à tester sérieusement, pas juste "au cas où".
+- **GDI+ (PNG)** : disponible depuis XP SP2 (pas XP RTM) — à documenter comme prérequis minimum si Vista/XP est visé (XP SP2 ou supérieur uniquement).
+- **API de boîte de dialogue fichier** (`GetOpenFileName`) : l'ancienne API fonctionne sous XP, mais l'apparence diffère (pas le style "Explorer" moderne) — cosmétique, pas bloquant.
+- **Compilateur/toolchain** : MinGW récent peut viser XP en théorie (`_WIN32_WINNT=0x0501`), mais certaines API Win32 utilisées ailleurs dans le projet (potentiellement des appels plus récents introduits sans y penser au fil des passes précédentes) devront être auditées une par une pour vérifier leur disponibilité sous XP.
+
+## Questions à trancher avant d'écrire le vrai prompt
+
+- Vraiment XP RTM, ou XP SP2+ comme plancher réaliste (a un vrai impact sur GDI+ et la sécurité de l'API) ?
+- Accès à une VM XP/Vista pour test réel — encore plus indispensable ici qu'ailleurs vu l'absence totale de DWM et la variabilité des pilotes graphiques d'époque.
+- Auditer rétroactivement tout le code écrit jusqu'ici (chrome custom, GDI+, OpenGL) pour repérer toute API introduite implicitement qui ne serait pas disponible sous XP — ce travail d'audit doit précéder l'écriture du vrai prompt, pas être découvert en cours de route.
