@@ -15,6 +15,28 @@ Déclinaison pour machines très anciennes (processeurs/cartes graphiques ère 2
 - Toolchain : MinGW (comme le C++ actuel) ou Open Watcom (plus proche des compilateurs de l'époque) ?
 - Nom exact du dossier — actuellement `c-legacy/`, provisoire.
 
-## État actuel
+## État actuel (v0)
 
-Squelette minimal Win32 + GDI : fenêtre + zone de texte via contrôle EDIT natif (le plus léger possible, pas de rendu de glyphes maison tant que le point "réutilisation du C++" n'est pas tranché). À développer une fois les points ci-dessus clarifiés — notamment le système cible précis, qui conditionne les API Win32 utilisables.
+Éditeur `.txt` fonctionnel, compilé sans avertissement (non testé sur une vraie machine Windows : pas de Windows ici).
+
+- Menus Fichier / Édition / Affichage / ?, raccourcis Ctrl+N/O/S/A, Ctrl+Maj+S.
+- Confirmation avant de perdre des modifications, `*` dans le titre si modifié.
+- Retour à la ligne activable, fins de ligne Unix converties à l'ouverture, BOM UTF-8 ignoré.
+- Ouverture d'un fichier passé en argument (glisser un `.txt` sur l'exe).
+
+Choix provisoires (à valider) : API ANSI uniquement (le texte est en page de code Windows, pas en Unicode — c'est ce qui permet de viser Windows 95) ; police Arial 11 pt ; contrôle EDIT natif.
+
+**Limite connue** : sous Windows 95/98/Me, le contrôle EDIT est plafonné à ~64 Ko de texte (un message l'indique). Sous 2000/XP, pas de limite pratique. Si la cible descend jusqu'à 9x, passer à RichEdit 1.0 (présent dès Windows 95) lèverait cette limite.
+
+## Optimisations
+
+- Aucune dépendance à la bibliothèque C (CRT) : point d'entrée maison, allocations via `HeapAlloc`, fichiers via `CreateFile`.
+- Exécutable de **9,7 Ko**, qui n'importe que `kernel32`, `user32`, `gdi32` et `comdlg32` — toutes les fonctions utilisées existent depuis Windows 95.
+- Code C89 strict, compilé pour i386 sans SSE : tourne sur tout processeur x86 32 bits.
+- En-tête PE marqué sous-système 4.0 pour être accepté par les chargeurs de Windows 95 / NT 4.
+
+## Compiler
+
+```
+make        # nécessite i686-w64-mingw32-gcc (paquet gcc-mingw-w64-i686 sous Debian/Ubuntu)
+```

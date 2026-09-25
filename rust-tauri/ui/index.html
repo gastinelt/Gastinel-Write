@@ -6,16 +6,22 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <header class="titlebar">
+  <header class="toolbar" role="toolbar" aria-label="Fichier">
     <span class="product-name">Gastinel Write</span>
+    <nav class="actions">
+      <button type="button" data-action="new" title="Nouveau (Ctrl+N)">Nouveau</button>
+      <button type="button" data-action="open" title="Ouvrir (Ctrl+O)">Ouvrir</button>
+      <button type="button" data-action="save" title="Enregistrer (Ctrl+S)">Enregistrer</button>
+    </nav>
   </header>
 
   <main>
-    <div id="editor" contenteditable="true" spellcheck="false"></div>
+    <textarea id="editor" spellcheck="false" autofocus aria-label="Document"
+              placeholder="L'écriture, sans fard."></textarea>
   </main>
 
   <footer>
-    <span class="slogan">L'écriture, sans fard.</span>
+    <span id="status" aria-live="polite">0 mot</span>
     <span class="legal">Gastinel. Logiciel libre de droit.</span>
   </footer>
 

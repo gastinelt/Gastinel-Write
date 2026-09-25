@@ -1,54 +1,109 @@
 :root {
-  --accent-blue: #2f6fed;
-  --text: #1a1a1a;
+  --accent: #2f6fed;
+  --text: #16181d;
+  --muted: #8b8f98;
+  --line: #ececef;
   --bg: #ffffff;
-  --muted: #8a8a8a;
+  --bg-hover: #f4f5f7;
+  --column: 72ch;
 }
 
-* {
-  box-sizing: border-box;
+@media (prefers-color-scheme: dark) {
+  :root {
+    --accent: #6b9bff;
+    --text: #e6e7ea;
+    --muted: #7d828c;
+    --line: #26282d;
+    --bg: #131417;
+    --bg-hover: #1c1e22;
+  }
 }
+
+* { box-sizing: border-box; }
+
+html, body { height: 100%; }
 
 body {
   margin: 0;
-  font-family: "Inter", system-ui, sans-serif;
+  font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
   color: var(--text);
   background: var(--bg);
-  height: 100vh;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  -webkit-font-smoothing: antialiased;
 }
 
-.titlebar {
-  padding: 10px 16px;
-  border-bottom: 1px solid #ececec;
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 44px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--line);
+  user-select: none;
+}
+
+.product-name {
   font-weight: 600;
+  font-size: 13px;
+  letter-spacing: 0.01em;
+}
+
+.actions { display: flex; gap: 4px; }
+
+.actions button {
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+
+.actions button:hover { background: var(--bg-hover); }
+
+.actions button:focus-visible {
+  outline: none;
+  border-color: var(--accent);
 }
 
 main {
-  flex: 1;
+  min-height: 0;
   display: flex;
-  overflow: hidden;
 }
 
 #editor {
   flex: 1;
-  padding: 32px;
+  width: 100%;
+  resize: none;
+  border: 0;
   outline: none;
-  font-size: 16px;
-  line-height: 1.6;
-  overflow-y: auto;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 17px;
+  line-height: 1.65;
+  /* Colonne de lecture centrée, largeur fixe en caractères. */
+  padding: 48px max(24px, calc((100% - var(--column)) / 2));
+  tab-size: 4;
+  caret-color: var(--accent);
 }
 
-#editor:focus {
-  box-shadow: inset 2px 0 0 var(--accent-blue);
-}
+#editor::placeholder { color: var(--muted); }
+
+#editor::selection { background: color-mix(in srgb, var(--accent) 25%, transparent); }
 
 footer {
-  padding: 8px 16px;
   display: flex;
   justify-content: space-between;
-  font-size: 12px;
+  height: 28px;
+  align-items: center;
+  padding: 0 16px;
+  font-size: 11px;
   color: var(--muted);
-  border-top: 1px solid #ececec;
+  border-top: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
+  user-select: none;
 }

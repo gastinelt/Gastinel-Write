@@ -18,6 +18,33 @@ DA de référence : celle de Gastinel Weather Studio (Inter, minimalisme, préci
 - Format de manifeste/sandbox des extensions (accès document ouvert ? fichiers ? réseau ?) — nécessaire avant la première extension réelle (prise de notes IA), pas avant.
 - Licence et visibilité du dossier (mêmes règles "tous droits réservés" que le C++ ?).
 
-## État actuel
+## État actuel (v0)
 
-Squelette minimal Tauri (v0, sans extensions) : fenêtre + zone de texte de base. À développer.
+Éditeur de texte brut fonctionnel, compilé et testé sous Linux (Xvfb).
+
+- Nouveau / Ouvrir / Enregistrer / Enregistrer sous (Ctrl+N, Ctrl+O, Ctrl+S, Ctrl+Maj+S).
+- Demande de confirmation si le document est modifié (nouveau, ouvrir, fermeture de fenêtre).
+- Lecture UTF-8 (BOM ignoré), repli Latin-1 pour les vieux fichiers `.txt`.
+- Écriture atomique (fichier temporaire + renommage) : jamais de document à moitié écrit.
+- Compteur mots/caractères, titre de fenêtre avec indicateur de modification, thème sombre automatique.
+- Ouverture d'un fichier passé en argument de la ligne de commande.
+
+Choix provisoires (à valider) : `.txt` uniquement tant que le format n'est pas tranché ; `<textarea>` plutôt que `contenteditable` (plus rapide sur les gros textes, fidèle au texte brut) — le formatage attendra la décision sur le format ; police Inter utilisée si installée, à embarquer localement (licence OFL) plus tard ; icône provisoire.
+
+## Optimisations
+
+- Profil release : `opt-level = "s"`, LTO, `codegen-units = 1`, `panic = "abort"`, symboles retirés → binaire de 4,5 Mo.
+- Une seule dépendance en plus de Tauri : `tauri-plugin-dialog` (officiel). Aucun `node_modules`, aucun bundler.
+- Droits de la WebView réduits au strict nécessaire (`capabilities/default.json`) et CSP stricte.
+- Compteur de mots calculé en période d'inactivité, pas à chaque frappe.
+
+## Commandes
+
+```
+cargo run                 # lancer en développement
+cargo test                # tests (lecture/écriture de fichiers)
+cargo build --release     # binaire optimisé
+cargo install tauri-cli --version "^2" && cargo tauri build   # installeurs (.msi, .deb, ...)
+```
+
+Dépendances système sous Linux : `libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev`.

@@ -1,0 +1,7 @@
+# Rust / Tauri
+rust-tauri/target/
+rust-tauri/gen/
+
+# C legacy
+c-legacy/*.exe
+c-legacy/*.o

@@ -1,28 +1,30 @@
 {
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Gastinel Write",
+  "version": "0.1.0",
+  "identifier": "com.gastinel.write",
   "build": {
-    "distDir": "../ui",
-    "devPath": "../ui"
+    "frontendDist": "ui"
   },
-  "package": {
-    "productName": "Gastinel Write",
-    "version": "0.1.0"
-  },
-  "tauri": {
-    "bundle": {
-      "active": true,
-      "identifier": "com.gastinel.write",
-      "targets": "all"
-    },
+  "app": {
+    "withGlobalTauri": true,
     "windows": [
       {
         "title": "Gastinel Write",
         "width": 1000,
-        "height": 700,
+        "height": 720,
+        "minWidth": 480,
+        "minHeight": 320,
         "resizable": true
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src ipc: http://ipc.localhost"
     }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": ["icons/icon.png"]
   }
 }
