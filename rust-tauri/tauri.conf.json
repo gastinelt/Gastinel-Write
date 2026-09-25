@@ -1,0 +1,28 @@
+{
+  "build": {
+    "distDir": "../ui",
+    "devPath": "../ui"
+  },
+  "package": {
+    "productName": "Gastinel Write",
+    "version": "0.1.0"
+  },
+  "tauri": {
+    "bundle": {
+      "active": true,
+      "identifier": "com.gastinel.write",
+      "targets": "all"
+    },
+    "windows": [
+      {
+        "title": "Gastinel Write",
+        "width": 1000,
+        "height": 700,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  }
+}

@@ -1,0 +1,54 @@
+:root {
+  --accent-blue: #2f6fed;
+  --text: #1a1a1a;
+  --bg: #ffffff;
+  --muted: #8a8a8a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Inter", system-ui, sans-serif;
+  color: var(--text);
+  background: var(--bg);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.titlebar {
+  padding: 10px 16px;
+  border-bottom: 1px solid #ececec;
+  font-weight: 600;
+}
+
+main {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+#editor {
+  flex: 1;
+  padding: 32px;
+  outline: none;
+  font-size: 16px;
+  line-height: 1.6;
+  overflow-y: auto;
+}
+
+#editor:focus {
+  box-shadow: inset 2px 0 0 var(--accent-blue);
+}
+
+footer {
+  padding: 8px 16px;
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--muted);
+  border-top: 1px solid #ececec;
+}
