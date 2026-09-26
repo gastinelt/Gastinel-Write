@@ -1,15 +1,19 @@
 /*
  * Gastinel Write - declinaison C ultra-legere.
- * C89, Win32 ANSI, GDI seul. Aucune dependance a la CRT : l'executable
- * n'importe que kernel32, user32, gdi32 et comdlg32 (presents depuis Windows 95).
+ * C89, Win32 Unicode, GDI seul, cible Windows XP. Aucune dependance a la CRT :
+ * l'executable n'importe que kernel32, user32, gdi32 et comdlg32.
+ * Fichiers lus en UTF-8 / UTF-16 / ANSI, toujours enregistres en UTF-8 sans BOM
+ * (meme format que la declinaison Rust/Tauri).
  */
 
+#define UNICODE
+#define _UNICODE
 #include <windows.h>
 #include <commdlg.h>
 
-#define APP_NAME    "Gastinel Write"
-#define APP_SLOGAN  "L'\xE9" "criture, sans fard."
-#define APP_LEGAL   "Gastinel. Logiciel libre de droit."
+#define APP_NAME    L"Gastinel Write"
+#define APP_SLOGAN  L"L'écriture, sans fard."
+#define APP_LEGAL   L"Gastinel. Logiciel libre de droit."
 
 #define IDC_EDIT        100
 #define IDM_NEW         200
@@ -31,7 +35,8 @@ static HINSTANCE g_hInst;
 static HWND      g_hWnd;
 static HWND      g_hEdit;
 static HFONT     g_hFont;
-static char      g_path[MAX_PATH];
+static HANDLE    g_heap;
+static WCHAR     g_path[MAX_PATH];
 static BOOL      g_wrap = TRUE;
 
 /* gcc peut generer des appels implicites a memset/memcpy meme sans CRT. */
@@ -50,87 +55,126 @@ void *memcpy(void *dst, const void *src, unsigned int n)
     return dst;
 }
 
-static const char *base_name(const char *path)
+static void *mem_alloc(DWORD n) { return HeapAlloc(g_heap, 0, n); }
+static void  mem_free(void *p)  { if (p) HeapFree(g_heap, 0, p); }
+
+static const WCHAR *base_name(const WCHAR *path)
 {
-    const char *p = path, *name = path;
+    const WCHAR *p = path, *name = path;
     for (; *p; ++p)
-        if (*p == '\\' || *p == '/') name = p + 1;
+        if (*p == L'\\' || *p == L'/') name = p + 1;
     return name;
 }
 
 static void update_title(void)
 {
-    char title[MAX_PATH + 64];
+    WCHAR title[MAX_PATH + 64];
     BOOL dirty = (BOOL)SendMessage(g_hEdit, EM_GETMODIFY, 0, 0);
-    wsprintf(title, "%s%s - " APP_NAME,
-             dirty ? "*" : "",
-             g_path[0] ? base_name(g_path) : "Sans titre");
+    wsprintf(title, L"%s%s - %s",
+             dirty ? L"*" : L"",
+             g_path[0] ? base_name(g_path) : L"Sans titre",
+             APP_NAME);
     SetWindowText(g_hWnd, title);
 }
 
-static void error_box(const char *msg)
+static void error_box(const WCHAR *msg)
 {
     MessageBox(g_hWnd, msg, APP_NAME, MB_OK | MB_ICONERROR);
 }
 
+/* Octets du fichier -> UTF-16. Ordre : BOM UTF-16LE, BOM UTF-8, UTF-8 valide, sinon page ANSI. */
+static WCHAR *decode(const BYTE *src, DWORD len, DWORD *out_len)
+{
+    WCHAR *dst;
+    int n;
+    UINT cp = CP_UTF8;
+    DWORD flags = MB_ERR_INVALID_CHARS;
+
+    if (len >= 2 && src[0] == 0xFF && src[1] == 0xFE) {
+        len = (len - 2) / 2;
+        dst = (WCHAR *)mem_alloc((len + 1) * sizeof(WCHAR));
+        if (!dst) return NULL;
+        memcpy(dst, src + 2, len * sizeof(WCHAR));
+        *out_len = len;
+        return dst;
+    }
+    if (len >= 3 && src[0] == 0xEF && src[1] == 0xBB && src[2] == 0xBF) {
+        src += 3; len -= 3;
+    }
+    if (len == 0) {
+        dst = (WCHAR *)mem_alloc(sizeof(WCHAR));
+        *out_len = 0;
+        return dst;
+    }
+    n = MultiByteToWideChar(cp, flags, (LPCSTR)src, (int)len, NULL, 0);
+    if (n == 0) {
+        cp = CP_ACP;
+        flags = 0;
+        n = MultiByteToWideChar(cp, flags, (LPCSTR)src, (int)len, NULL, 0);
+        if (n == 0) return NULL;
+    }
+    dst = (WCHAR *)mem_alloc((DWORD)(n + 1) * sizeof(WCHAR));
+    if (!dst) return NULL;
+    MultiByteToWideChar(cp, flags, (LPCSTR)src, (int)len, dst, n);
+    *out_len = (DWORD)n;
+    return dst;
+}
+
 /* Le controle EDIT exige des fins de ligne CRLF : on normalise LF et CR isoles. */
-static char *to_crlf(const char *src, DWORD len)
+static WCHAR *to_crlf(const WCHAR *src, DWORD len)
 {
     DWORD i, extra = 0, out = 0;
-    char *dst;
+    WCHAR *dst;
     for (i = 0; i < len; ++i) {
-        if (src[i] == '\n' && (i == 0 || src[i - 1] != '\r')) ++extra;
-        else if (src[i] == '\r' && (i + 1 >= len || src[i + 1] != '\n')) ++extra;
+        if (src[i] == L'\n' && (i == 0 || src[i - 1] != L'\r')) ++extra;
+        else if (src[i] == L'\r' && (i + 1 >= len || src[i + 1] != L'\n')) ++extra;
     }
-    dst = (char *)HeapAlloc(GetProcessHeap(), 0, len + extra + 1);
+    dst = (WCHAR *)mem_alloc((len + extra + 1) * sizeof(WCHAR));
     if (!dst) return NULL;
     for (i = 0; i < len; ++i) {
-        char c = src[i];
-        if (c == '\n' && (i == 0 || src[i - 1] != '\r')) {
-            dst[out++] = '\r'; dst[out++] = '\n';
-        } else if (c == '\r' && (i + 1 >= len || src[i + 1] != '\n')) {
-            dst[out++] = '\r'; dst[out++] = '\n';
+        WCHAR c = src[i];
+        if ((c == L'\n' && (i == 0 || src[i - 1] != L'\r')) ||
+            (c == L'\r' && (i + 1 >= len || src[i + 1] != L'\n'))) {
+            dst[out++] = L'\r';
+            dst[out++] = L'\n';
         } else {
             dst[out++] = c;
         }
     }
-    dst[out] = '\0';
+    dst[out] = 0;
     return dst;
 }
 
-static BOOL load_file(const char *path)
+static BOOL load_file(const WCHAR *path)
 {
     HANDLE f;
-    DWORD size, got;
-    char *raw, *text;
-    const char *start;
+    DWORD size, got, wlen = 0;
+    BYTE *raw;
+    WCHAR *wide, *text;
 
     f = CreateFile(path, GENERIC_READ, FILE_SHARE_READ, NULL,
                    OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (f == INVALID_HANDLE_VALUE) { error_box("Impossible d'ouvrir le fichier."); return FALSE; }
+    if (f == INVALID_HANDLE_VALUE) { error_box(L"Impossible d'ouvrir le fichier."); return FALSE; }
 
     size = GetFileSize(f, NULL);
-    raw = (char *)HeapAlloc(GetProcessHeap(), 0, size + 1);
-    if (!raw || !ReadFile(f, raw, size, &got, NULL) || got != size) {
+    raw = (BYTE *)mem_alloc(size + 1);
+    if (size == INVALID_FILE_SIZE || !raw ||
+        !ReadFile(f, raw, size, &got, NULL) || got != size) {
         CloseHandle(f);
-        if (raw) HeapFree(GetProcessHeap(), 0, raw);
-        error_box("Lecture du fichier impossible.");
+        mem_free(raw);
+        error_box(L"Lecture du fichier impossible.");
         return FALSE;
     }
     CloseHandle(f);
 
-    start = raw;
-    if (size >= 3 && (unsigned char)raw[0] == 0xEF &&
-        (unsigned char)raw[1] == 0xBB && (unsigned char)raw[2] == 0xBF) {
-        start += 3; size -= 3;  /* BOM UTF-8 ignore */
-    }
-
-    text = to_crlf(start, size);
-    HeapFree(GetProcessHeap(), 0, raw);
-    if (!text) { error_box("M\xE9moire insuffisante."); return FALSE; }
+    wide = decode(raw, size, &wlen);
+    mem_free(raw);
+    text = wide ? to_crlf(wide, wlen) : NULL;
+    mem_free(wide);
+    if (!text) { error_box(L"Fichier illisible ou mémoire insuffisante."); return FALSE; }
 
     SetWindowText(g_hEdit, text);
-    HeapFree(GetProcessHeap(), 0, text);
+    mem_free(text);
 
     lstrcpyn(g_path, path, MAX_PATH);
     SendMessage(g_hEdit, EM_SETMODIFY, FALSE, 0);
@@ -138,32 +182,52 @@ static BOOL load_file(const char *path)
     return TRUE;
 }
 
-static BOOL save_file(const char *path)
+/* Ecriture atomique : fichier temporaire a cote de la cible, puis remplacement,
+   pour ne jamais laisser un document a moitie ecrit en cas de coupure. */
+static BOOL write_atomic(const WCHAR *path, const char *data, DWORD len)
 {
+    WCHAR tmp[MAX_PATH + 8];
     HANDLE f;
-    int len;
     DWORD written;
-    char *text;
+    BOOL ok;
 
-    len = GetWindowTextLength(g_hEdit);
-    text = (char *)HeapAlloc(GetProcessHeap(), 0, len + 1);
-    if (!text) { error_box("M\xE9moire insuffisante."); return FALSE; }
-    GetWindowText(g_hEdit, text, len + 1);
+    if (lstrlen(path) + 8 >= MAX_PATH) return FALSE;
+    wsprintf(tmp, L"%s.gw-tmp", path);
 
-    f = CreateFile(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (f == INVALID_HANDLE_VALUE) {
-        HeapFree(GetProcessHeap(), 0, text);
-        error_box("Impossible d'enregistrer le fichier.");
-        return FALSE;
-    }
-    if (!WriteFile(f, text, (DWORD)len, &written, NULL) || written != (DWORD)len) {
-        CloseHandle(f);
-        HeapFree(GetProcessHeap(), 0, text);
-        error_box("\xC9" "criture incompl\xE8te.");
-        return FALSE;
-    }
+    f = CreateFile(tmp, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (f == INVALID_HANDLE_VALUE) return FALSE;
+    ok = WriteFile(f, data, len, &written, NULL) && written == len && FlushFileBuffers(f);
     CloseHandle(f);
-    HeapFree(GetProcessHeap(), 0, text);
+
+    if (ok) ok = MoveFileEx(tmp, path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+    if (!ok) DeleteFile(tmp);
+    return ok;
+}
+
+static BOOL save_file(const WCHAR *path)
+{
+    int wlen, len;
+    WCHAR *text;
+    char *utf8 = NULL;
+    BOOL ok = FALSE;
+
+    wlen = GetWindowTextLength(g_hEdit);
+    text = (WCHAR *)mem_alloc((DWORD)(wlen + 1) * sizeof(WCHAR));
+    if (!text) { error_box(L"Mémoire insuffisante."); return FALSE; }
+    GetWindowText(g_hEdit, text, wlen + 1);
+
+    len = wlen ? WideCharToMultiByte(CP_UTF8, 0, text, wlen, NULL, 0, NULL, NULL) : 0;
+    if (wlen == 0 || len > 0) {
+        utf8 = (char *)mem_alloc((DWORD)len + 1);
+        if (utf8) {
+            if (len) WideCharToMultiByte(CP_UTF8, 0, text, wlen, utf8, len, NULL, NULL);
+            ok = write_atomic(path, utf8, (DWORD)len);
+        }
+    }
+    mem_free(utf8);
+    mem_free(text);
+
+    if (!ok) { error_box(L"Impossible d'enregistrer le fichier."); return FALSE; }
 
     lstrcpyn(g_path, path, MAX_PATH);
     SendMessage(g_hEdit, EM_SETMODIFY, FALSE, 0);
@@ -171,25 +235,24 @@ static BOOL save_file(const char *path)
     return TRUE;
 }
 
-static BOOL file_dialog(char *out, BOOL saving)
+static BOOL file_dialog(WCHAR *out, BOOL saving)
 {
     OPENFILENAME ofn;
     memset(&ofn, 0, sizeof ofn);
-    /* Taille "pre-2000" : acceptee par tous les comdlg32, de Windows 95 a aujourd'hui. */
-    ofn.lStructSize = OPENFILENAME_SIZE_VERSION_400;
+    ofn.lStructSize = sizeof ofn;
     ofn.hwndOwner   = g_hWnd;
-    ofn.lpstrFilter = "Texte (*.txt)\0*.txt\0Tous les fichiers (*.*)\0*.*\0";
+    ofn.lpstrFilter = L"Texte (*.txt)\0*.txt\0Tous les fichiers (*.*)\0*.*\0";
     ofn.lpstrFile   = out;
     ofn.nMaxFile    = MAX_PATH;
-    ofn.lpstrDefExt = "txt";
-    ofn.Flags       = OFN_HIDEREADONLY |
+    ofn.lpstrDefExt = L"txt";
+    ofn.Flags       = OFN_HIDEREADONLY | OFN_ENABLESIZING |
                       (saving ? OFN_OVERWRITEPROMPT : OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST);
     return saving ? GetSaveFileName(&ofn) : GetOpenFileName(&ofn);
 }
 
 static BOOL do_save_as(void)
 {
-    char path[MAX_PATH];
+    WCHAR path[MAX_PATH];
     lstrcpyn(path, g_path, MAX_PATH);
     return file_dialog(path, TRUE) && save_file(path);
 }
@@ -204,7 +267,7 @@ static BOOL confirm_discard(void)
 {
     int r;
     if (!SendMessage(g_hEdit, EM_GETMODIFY, 0, 0)) return TRUE;
-    r = MessageBox(g_hWnd, "Enregistrer les modifications ?", APP_NAME,
+    r = MessageBox(g_hWnd, L"Enregistrer les modifications ?", APP_NAME,
                    MB_YESNOCANCEL | MB_ICONQUESTION);
     if (r == IDCANCEL) return FALSE;
     if (r == IDYES) return do_save();
@@ -214,17 +277,17 @@ static BOOL confirm_discard(void)
 static void do_new(void)
 {
     if (!confirm_discard()) return;
-    SetWindowText(g_hEdit, "");
-    g_path[0] = '\0';
+    SetWindowText(g_hEdit, L"");
+    g_path[0] = 0;
     SendMessage(g_hEdit, EM_SETMODIFY, FALSE, 0);
     update_title();
 }
 
 static void do_open(void)
 {
-    char path[MAX_PATH];
+    WCHAR path[MAX_PATH];
     if (!confirm_discard()) return;
-    path[0] = '\0';
+    path[0] = 0;
     if (file_dialog(path, FALSE)) load_file(path);
 }
 
@@ -236,17 +299,16 @@ static void layout_edit(void)
 }
 
 /* ES_AUTOHSCROLL ne peut pas changer apres creation : on recree le controle
-   en conservant texte, selection et etat de modification. */
-static void create_edit(const char *initial, BOOL modified)
+   en conservant texte et etat de modification. */
+static void create_edit(const WCHAR *initial, BOOL modified)
 {
     DWORD style = WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE |
                   ES_AUTOVSCROLL | ES_NOHIDESEL;
     if (!g_wrap) style |= WS_HSCROLL | ES_AUTOHSCROLL;
 
-    g_hEdit = CreateWindowEx(WS_EX_CLIENTEDGE, "EDIT", initial, style,
+    g_hEdit = CreateWindowEx(0, L"EDIT", initial, style,
                              0, 0, 0, 0, g_hWnd, (HMENU)IDC_EDIT, g_hInst, NULL);
-    /* Sous NT, leve la limite de 32 Ko ; sous 9x le noyau plafonne a ~64 Ko. */
-    SendMessage(g_hEdit, EM_SETLIMITTEXT, 0, 0);
+    SendMessage(g_hEdit, EM_SETLIMITTEXT, 0, 0);  /* sous NT : ~2 Go au lieu de 32 Ko */
     SendMessage(g_hEdit, WM_SETFONT, (WPARAM)g_hFont, FALSE);
     SendMessage(g_hEdit, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN,
                 MAKELONG(EDIT_MARGIN, EDIT_MARGIN));
@@ -258,22 +320,21 @@ static void create_edit(const char *initial, BOOL modified)
 static void toggle_wrap(void)
 {
     int len;
-    char *text;
+    WCHAR *text;
     BOOL modified;
-    HMENU menu = GetMenu(g_hWnd);
 
     len = GetWindowTextLength(g_hEdit);
-    text = (char *)HeapAlloc(GetProcessHeap(), 0, len + 1);
-    if (!text) { error_box("M\xE9moire insuffisante."); return; }
+    text = (WCHAR *)mem_alloc((DWORD)(len + 1) * sizeof(WCHAR));
+    if (!text) { error_box(L"Mémoire insuffisante."); return; }
     GetWindowText(g_hEdit, text, len + 1);
     modified = (BOOL)SendMessage(g_hEdit, EM_GETMODIFY, 0, 0);
 
     DestroyWindow(g_hEdit);
     g_wrap = !g_wrap;
     create_edit(text, modified);
-    HeapFree(GetProcessHeap(), 0, text);
+    mem_free(text);
 
-    CheckMenuItem(menu, IDM_WRAP, g_wrap ? MF_CHECKED : MF_UNCHECKED);
+    CheckMenuItem(GetMenu(g_hWnd), IDM_WRAP, g_wrap ? MF_CHECKED : MF_UNCHECKED);
 }
 
 static HMENU build_menu(void)
@@ -281,29 +342,29 @@ static HMENU build_menu(void)
     HMENU bar = CreateMenu(), file = CreatePopupMenu(),
           edit = CreatePopupMenu(), view = CreatePopupMenu(), help = CreatePopupMenu();
 
-    AppendMenu(file, MF_STRING, IDM_NEW,    "&Nouveau\tCtrl+N");
-    AppendMenu(file, MF_STRING, IDM_OPEN,   "&Ouvrir...\tCtrl+O");
-    AppendMenu(file, MF_STRING, IDM_SAVE,   "&Enregistrer\tCtrl+S");
-    AppendMenu(file, MF_STRING, IDM_SAVEAS, "Enregistrer &sous...");
+    AppendMenu(file, MF_STRING, IDM_NEW,    L"&Nouveau\tCtrl+N");
+    AppendMenu(file, MF_STRING, IDM_OPEN,   L"&Ouvrir...\tCtrl+O");
+    AppendMenu(file, MF_STRING, IDM_SAVE,   L"&Enregistrer\tCtrl+S");
+    AppendMenu(file, MF_STRING, IDM_SAVEAS, L"Enregistrer &sous...\tCtrl+Maj+S");
     AppendMenu(file, MF_SEPARATOR, 0, NULL);
-    AppendMenu(file, MF_STRING, IDM_EXIT,   "&Quitter");
+    AppendMenu(file, MF_STRING, IDM_EXIT,   L"&Quitter");
 
-    AppendMenu(edit, MF_STRING, IDM_UNDO,   "&Annuler\tCtrl+Z");
+    AppendMenu(edit, MF_STRING, IDM_UNDO,   L"&Annuler\tCtrl+Z");
     AppendMenu(edit, MF_SEPARATOR, 0, NULL);
-    AppendMenu(edit, MF_STRING, IDM_CUT,    "Co&uper\tCtrl+X");
-    AppendMenu(edit, MF_STRING, IDM_COPY,   "&Copier\tCtrl+C");
-    AppendMenu(edit, MF_STRING, IDM_PASTE,  "C&oller\tCtrl+V");
+    AppendMenu(edit, MF_STRING, IDM_CUT,    L"Co&uper\tCtrl+X");
+    AppendMenu(edit, MF_STRING, IDM_COPY,   L"&Copier\tCtrl+C");
+    AppendMenu(edit, MF_STRING, IDM_PASTE,  L"C&oller\tCtrl+V");
     AppendMenu(edit, MF_SEPARATOR, 0, NULL);
-    AppendMenu(edit, MF_STRING, IDM_SELALL, "&Tout s\xE9lectionner\tCtrl+A");
+    AppendMenu(edit, MF_STRING, IDM_SELALL, L"&Tout sélectionner\tCtrl+A");
 
-    AppendMenu(view, MF_STRING | MF_CHECKED, IDM_WRAP, "&Retour \xE0 la ligne");
+    AppendMenu(view, MF_STRING | MF_CHECKED, IDM_WRAP, L"&Retour à la ligne");
 
-    AppendMenu(help, MF_STRING, IDM_ABOUT,  "\xC0 &propos");
+    AppendMenu(help, MF_STRING, IDM_ABOUT,  L"À &propos");
 
-    AppendMenu(bar, MF_POPUP, (UINT_PTR)file, "&Fichier");
-    AppendMenu(bar, MF_POPUP, (UINT_PTR)edit, "&\xC9" "dition");
-    AppendMenu(bar, MF_POPUP, (UINT_PTR)view, "&Affichage");
-    AppendMenu(bar, MF_POPUP, (UINT_PTR)help, "&?");
+    AppendMenu(bar, MF_POPUP, (UINT_PTR)file, L"&Fichier");
+    AppendMenu(bar, MF_POPUP, (UINT_PTR)edit, L"É&dition");
+    AppendMenu(bar, MF_POPUP, (UINT_PTR)view, L"&Affichage");
+    AppendMenu(bar, MF_POPUP, (UINT_PTR)help, L"&?");
     return bar;
 }
 
@@ -323,10 +384,10 @@ static HFONT create_font(void)
     HDC dc = GetDC(NULL);
     int height = -MulDiv(11, GetDeviceCaps(dc, LOGPIXELSY), 72);
     ReleaseDC(NULL, dc);
-    /* Arial est livree avec toutes les versions de Windows depuis 3.1. */
+    /* Tahoma est la police d'interface de XP ; ClearType s'applique s'il est active. */
     return CreateFont(height, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                       DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                      DEFAULT_QUALITY, DEFAULT_PITCH | FF_SWISS, "Arial");
+                      CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Tahoma");
 }
 
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -335,7 +396,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
     case WM_CREATE:
         g_hWnd = hwnd;
         g_hFont = create_font();
-        create_edit("", FALSE);
+        create_edit(L"", FALSE);
         return 0;
 
     case WM_SIZE:
@@ -350,7 +411,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         if (LOWORD(wParam) == IDC_EDIT) {
             if (HIWORD(wParam) == EN_CHANGE) update_title();
             else if (HIWORD(wParam) == EN_ERRSPACE || HIWORD(wParam) == EN_MAXTEXT)
-                error_box("Limite de taille du texte atteinte sur ce syst\xE8me.");
+                error_box(L"Mémoire insuffisante pour ce texte.");
             return 0;
         }
         switch (LOWORD(wParam)) {
@@ -366,8 +427,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         case IDM_SELALL: SendMessage(g_hEdit, EM_SETSEL, 0, -1); break;
         case IDM_WRAP:   toggle_wrap(); break;
         case IDM_ABOUT:
-            MessageBox(hwnd, APP_NAME "\n\n" APP_SLOGAN "\n\n" APP_LEGAL,
-                       "\xC0 propos", MB_OK | MB_ICONINFORMATION);
+            MessageBox(hwnd, APP_NAME L"\n\n" APP_SLOGAN L"\n\n" APP_LEGAL,
+                       L"À propos", MB_OK | MB_ICONINFORMATION);
             break;
         }
         return 0;
@@ -385,16 +446,16 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 }
 
 /* Premier argument de la ligne de commande (gere les guillemets). */
-static void first_arg(const char *cmd, char *out)
+static void first_arg(const WCHAR *cmd, WCHAR *out)
 {
     int n = 0;
-    char end = ' ';
-    if (*cmd == '"') { ++cmd; while (*cmd && *cmd != '"') ++cmd; if (*cmd) ++cmd; }
-    else while (*cmd && *cmd != ' ') ++cmd;
-    while (*cmd == ' ') ++cmd;
-    if (*cmd == '"') { end = '"'; ++cmd; }
+    WCHAR end = L' ';
+    if (*cmd == L'"') { ++cmd; while (*cmd && *cmd != L'"') ++cmd; if (*cmd) ++cmd; }
+    else while (*cmd && *cmd != L' ') ++cmd;
+    while (*cmd == L' ') ++cmd;
+    if (*cmd == L'"') { end = L'"'; ++cmd; }
     while (*cmd && *cmd != end && n < MAX_PATH - 1) out[n++] = *cmd++;
-    out[n] = '\0';
+    out[n] = 0;
 }
 
 static int run(void)
@@ -402,14 +463,15 @@ static int run(void)
     WNDCLASS wc;
     MSG msg;
     HACCEL accels;
-    char arg[MAX_PATH];
+    WCHAR arg[MAX_PATH];
 
     g_hInst = GetModuleHandle(NULL);
+    g_heap  = GetProcessHeap();
 
     memset(&wc, 0, sizeof wc);
     wc.lpfnWndProc   = WndProc;
     wc.hInstance     = g_hInst;
-    wc.lpszClassName = "GastinelWriteLegacy";
+    wc.lpszClassName = L"GastinelWriteLegacy";
     wc.hCursor       = LoadCursor(NULL, IDC_ARROW);
     wc.hIcon         = LoadIcon(NULL, IDI_APPLICATION);
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
