@@ -2,14 +2,17 @@
  * Gastinel Write - declinaison C ultra-legere.
  * C89, Win32 Unicode, GDI seul, cible Windows XP. Aucune dependance a la CRT :
  * l'executable n'importe que kernel32, user32, gdi32 et comdlg32.
- * Fichiers lus en UTF-8 / UTF-16 / ANSI, toujours enregistres en UTF-8 sans BOM
+ * .txt : lus en UTF-8 / UTF-16 / ANSI, enregistres en UTF-8 sans BOM
  * (meme format que la declinaison Rust/Tauri).
+ * .odt : meme sous-ensemble que la version C++ (voir odt.h).
  */
 
 #define UNICODE
 #define _UNICODE
 #include <windows.h>
 #include <commdlg.h>
+
+#include "odt.h"
 
 #define APP_NAME    L"Gastinel Write"
 #define APP_SLOGAN  L"L'écriture, sans fard."
@@ -57,6 +60,23 @@ void *memcpy(void *dst, const void *src, unsigned int n)
 
 static void *mem_alloc(DWORD n) { return HeapAlloc(g_heap, 0, n); }
 static void  mem_free(void *p)  { if (p) HeapFree(g_heap, 0, p); }
+
+/* Allocateur des modules purs (core.h). */
+void *gw_alloc(u32 n)            { return HeapAlloc(g_heap, 0, n); }
+void *gw_realloc(void *p, u32 n) { return HeapReAlloc(g_heap, 0, p, n); }
+void  gw_free(void *p)           { HeapFree(g_heap, 0, p); }
+
+/* Vrai si le document ouvert porte une mise en forme que cette version
+   ne sait pas conserver (fichier .odt ecrit par la version C++). */
+static BOOL g_lossy;
+
+static BOOL is_odt_path(const WCHAR *path)
+{
+    int n = lstrlen(path);
+    return n >= 4 && path[n - 4] == L'.' &&
+           (path[n - 3] | 0x20) == L'o' && (path[n - 2] | 0x20) == L'd' &&
+           (path[n - 1] | 0x20) == L't';
+}
 
 static const WCHAR *base_name(const WCHAR *path)
 {
@@ -167,8 +187,32 @@ static BOOL load_file(const WCHAR *path)
     }
     CloseHandle(f);
 
-    wide = decode(raw, size, &wlen);
-    mem_free(raw);
+    /* Un .odt se reconnait a sa signature zip, quelle que soit l'extension. */
+    if (size >= 4 && raw[0] == 'P' && raw[1] == 'K' && raw[2] == 3 && raw[3] == 4) {
+        Buf utf8;
+        const char *err;
+        int formatted = 0;
+        buf_init(&utf8);
+        err = odt_read(raw, size, &utf8, &formatted);
+        mem_free(raw);
+        if (err) {
+            WCHAR msg[160];
+            WCHAR detail[96];
+            MultiByteToWideChar(CP_ACP, 0, err, -1, detail, 96);
+            detail[95] = 0;
+            wsprintf(msg, L"Document OpenDocument illisible :\n%s", detail);
+            buf_free(&utf8);
+            error_box(msg);
+            return FALSE;
+        }
+        wide = decode(utf8.data, utf8.len, &wlen);
+        buf_free(&utf8);
+        g_lossy = formatted;
+    } else {
+        wide = decode(raw, size, &wlen);
+        mem_free(raw);
+        g_lossy = FALSE;
+    }
     text = wide ? to_crlf(wide, wlen) : NULL;
     mem_free(wide);
     if (!text) { error_box(L"Fichier illisible ou mémoire insuffisante."); return FALSE; }
@@ -210,6 +254,14 @@ static BOOL save_file(const WCHAR *path)
     WCHAR *text;
     char *utf8 = NULL;
     BOOL ok = FALSE;
+    BOOL odt = is_odt_path(path);
+
+    if (g_lossy && MessageBox(g_hWnd,
+            L"Ce document contient une mise en forme (gras, titres, listes...) "
+            L"que cette version de Gastinel Write ne sait pas conserver.\n\n"
+            L"Enregistrer quand même, en texte seul ?",
+            APP_NAME, MB_OKCANCEL | MB_ICONWARNING | MB_DEFBUTTON2) != IDOK)
+        return FALSE;
 
     wlen = GetWindowTextLength(g_hEdit);
     text = (WCHAR *)mem_alloc((DWORD)(wlen + 1) * sizeof(WCHAR));
@@ -221,7 +273,15 @@ static BOOL save_file(const WCHAR *path)
         utf8 = (char *)mem_alloc((DWORD)len + 1);
         if (utf8) {
             if (len) WideCharToMultiByte(CP_UTF8, 0, text, wlen, utf8, len, NULL, NULL);
-            ok = write_atomic(path, utf8, (DWORD)len);
+            if (odt) {
+                Buf zip;
+                if (odt_build((const u8 *)utf8, (u32)len, &zip)) {
+                    ok = write_atomic(path, (const char *)zip.data, zip.len);
+                    buf_free(&zip);
+                }
+            } else {
+                ok = write_atomic(path, utf8, (DWORD)len);
+            }
         }
     }
     mem_free(utf8);
@@ -229,6 +289,7 @@ static BOOL save_file(const WCHAR *path)
 
     if (!ok) { error_box(L"Impossible d'enregistrer le fichier."); return FALSE; }
 
+    g_lossy = FALSE;
     lstrcpyn(g_path, path, MAX_PATH);
     SendMessage(g_hEdit, EM_SETMODIFY, FALSE, 0);
     update_title();
@@ -241,7 +302,16 @@ static BOOL file_dialog(WCHAR *out, BOOL saving)
     memset(&ofn, 0, sizeof ofn);
     ofn.lStructSize = sizeof ofn;
     ofn.hwndOwner   = g_hWnd;
-    ofn.lpstrFilter = L"Texte (*.txt)\0*.txt\0Tous les fichiers (*.*)\0*.*\0";
+    if (saving) {
+        /* Le dialogue ajoute l'extension du filtre choisi ; on preselectionne
+           le format du document courant. */
+        ofn.lpstrFilter  = L"Texte (*.txt)\0*.txt\0OpenDocument (*.odt)\0*.odt\0";
+        ofn.nFilterIndex = is_odt_path(out) ? 2 : 1;
+    } else {
+        ofn.lpstrFilter  = L"Documents (*.txt, *.odt)\0*.txt;*.odt\0Texte (*.txt)\0*.txt\0"
+                           L"OpenDocument (*.odt)\0*.odt\0Tous les fichiers (*.*)\0*.*\0";
+        ofn.nFilterIndex = 1;
+    }
     ofn.lpstrFile   = out;
     ofn.nMaxFile    = MAX_PATH;
     ofn.lpstrDefExt = L"txt";
@@ -279,6 +349,7 @@ static void do_new(void)
     if (!confirm_discard()) return;
     SetWindowText(g_hEdit, L"");
     g_path[0] = 0;
+    g_lossy = FALSE;
     SendMessage(g_hEdit, EM_SETMODIFY, FALSE, 0);
     update_title();
 }
