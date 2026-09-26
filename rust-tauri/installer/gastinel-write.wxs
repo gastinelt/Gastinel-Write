@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Construit avec wixl (msitools) : wixl -a x64 -D SourceDir=<dossier> Write (Tauri).wxs -->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*" Name="Gastinel Write" Language="1036" Codepage="1252" Version="0.1.0.0"
+           Manufacturer="Gastinel" UpgradeCode="0B8E4C52-6A1D-4F39-9E2B-3C7A51D8F410">
+    <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine"
+             Description="Installeur pour Gastinel Write (Rust/Tauri)" Comments="L'écriture, sans fard."
+             Manufacturer="Gastinel" Languages="1036" SummaryCodepage="1252" />
+    <MajorUpgrade DowngradeErrorMessage="Une version plus récente de Gastinel Write est déjà installée." />
+    <Media Id="1" Cabinet="app.cab" EmbedCab="yes" />
+    <Icon Id="AppIcon.ico" SourceFile="$(var.SourceDir)/app.ico" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon.ico" />
+    <Property Id="ARPNOREPAIR" Value="yes" Secure="yes" />
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="GastinelCompanyFolder" Name="Gastinel">
+          <Directory Id="INSTALLDIR" Name="Write (Tauri)">
+            <Component Id="MainExecutable" Guid="0B8E4C52-6A1D-4F39-9E2B-3C7A51D8F411" Win64="yes">
+              <File Id="MainExe" Name="gastinel-write.exe" Source="$(var.SourceDir)/gastinel-write.exe" KeyPath="yes" />
+              <File Id="WebView2Loader" Name="WebView2Loader.dll" Source="$(var.SourceDir)/WebView2Loader.dll" />
+            </Component>
+          </Directory>
+        </Directory>
+      </Directory>
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="ApplicationProgramsFolder" Name="Gastinel Write (Tauri)">
+          <Component Id="Shortcuts" Guid="0B8E4C52-6A1D-4F39-9E2B-3C7A51D8F412">
+            <Shortcut Id="StartMenuShortcut" Name="Gastinel Write" Description="L'écriture, sans fard."
+                      Target="[INSTALLDIR]gastinel-write.exe" WorkingDirectory="INSTALLDIR" Icon="AppIcon.ico" />
+            <Shortcut Id="DesktopShortcut" Directory="DesktopFolder" Name="Gastinel Write" Description="L'écriture, sans fard."
+                      Target="[INSTALLDIR]gastinel-write.exe" WorkingDirectory="INSTALLDIR" Icon="AppIcon.ico" />
+            <RemoveFolder Id="CleanUpShortCut" On="uninstall" />
+            <RegistryValue Root="HKCU" Key="Software\Gastinel\Write\Tauri" Name="installed" Type="integer" Value="1" KeyPath="yes" />
+          </Component>
+        </Directory>
+      </Directory>
+      <Directory Id="DesktopFolder" Name="Desktop" />
+    </Directory>
+    <Feature Id="MainApplication" Title="Gastinel Write" Level="1">
+      <ComponentRef Id="MainExecutable" />
+      <ComponentRef Id="Shortcuts" />
+    </Feature>
+  </Product>
+</Wix>

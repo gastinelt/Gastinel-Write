@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Construit avec wixl (msitools) : wixl -a x86 -D SourceDir=<dossier> Write (XP).wxs -->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*" Name="Gastinel Write" Language="1036" Codepage="1252" Version="0.1.0.0"
+           Manufacturer="Gastinel" UpgradeCode="5E21A9D3-7C84-4B6F-A0D1-92F3E6B4C720">
+    <Package InstallerVersion="200" Compressed="yes" InstallScope="perMachine"
+             Description="Installeur pour Gastinel Write (XP)" Comments="L'écriture, sans fard."
+             Manufacturer="Gastinel" Languages="1036" SummaryCodepage="1252" />
+    <MajorUpgrade DowngradeErrorMessage="Une version plus récente de Gastinel Write est déjà installée." />
+    <Media Id="1" Cabinet="app.cab" EmbedCab="yes" />
+    <Icon Id="AppIcon.ico" SourceFile="$(var.SourceDir)/app.ico" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon.ico" />
+    <Property Id="ARPNOREPAIR" Value="yes" Secure="yes" />
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFilesFolder">
+        <Directory Id="GastinelCompanyFolder" Name="Gastinel">
+          <Directory Id="INSTALLDIR" Name="Write (XP)">
+            <Component Id="MainExecutable" Guid="5E21A9D3-7C84-4B6F-A0D1-92F3E6B4C721">
+              <File Id="MainExe" Name="gastinel-write-legacy.exe" Source="$(var.SourceDir)/gastinel-write-legacy.exe" KeyPath="yes" />
+
+            </Component>
+          </Directory>
+        </Directory>
+      </Directory>
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="ApplicationProgramsFolder" Name="Gastinel Write (XP)">
+          <Component Id="Shortcuts" Guid="5E21A9D3-7C84-4B6F-A0D1-92F3E6B4C722">
+            <Shortcut Id="StartMenuShortcut" Name="Gastinel Write" Description="L'écriture, sans fard."
+                      Target="[INSTALLDIR]gastinel-write-legacy.exe" WorkingDirectory="INSTALLDIR" Icon="AppIcon.ico" />
+            <Shortcut Id="DesktopShortcut" Directory="DesktopFolder" Name="Gastinel Write" Description="L'écriture, sans fard."
+                      Target="[INSTALLDIR]gastinel-write-legacy.exe" WorkingDirectory="INSTALLDIR" Icon="AppIcon.ico" />
+            <RemoveFolder Id="CleanUpShortCut" On="uninstall" />
+            <RegistryValue Root="HKCU" Key="Software\Gastinel\Write\Legacy" Name="installed" Type="integer" Value="1" KeyPath="yes" />
+          </Component>
+        </Directory>
+      </Directory>
+      <Directory Id="DesktopFolder" Name="Desktop" />
+    </Directory>
+    <Feature Id="MainApplication" Title="Gastinel Write" Level="1">
+      <ComponentRef Id="MainExecutable" />
+      <ComponentRef Id="Shortcuts" />
+    </Feature>
+  </Product>
+</Wix>
