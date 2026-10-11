@@ -1,6 +1,0 @@
-Gastinel Write — essai de round-trip
-Accents : eaeiou, ligature oe, guillemets francais
-XML a echapper : <balise> & "guillemets" 'apostrophe'
-
-Espaces    multiples	et tabulation
-Derniere ligne
