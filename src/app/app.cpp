@@ -43,6 +43,11 @@ enum MenuAction {
     kActionToggleDark,
     kActionToggleKeyboard,
 
+    // Tableaux, menu Edition. Un tableau est insere de 3 x 3 : les lignes et
+    // colonnes se completent ensuite au clavier (Tab ajoute une ligne).
+    kActionInsertTable,
+    kActionDeleteTable,
+
     // Les entrees du selecteur de police sont numerotees a partir de cette
     // base : leur identifiant porte l indice dans Settings::fonts(). Une plage
     // reservee plutot qu un enum par police, parce que la liste est construite
@@ -796,6 +801,12 @@ bool App::handle_editor_key(platform::Key key, platform::KeyModifiers mods) {
             return true;
 
         case Key::Tab:
+            // Dans un tableau, Tab passe a la cellule suivante (Maj+Tab a la
+            // precedente) et ajoute une ligne en fin de tableau.
+            if (editor_.move_cell(mods.shift)) {
+                after_edit();
+                return true;
+            }
             // Quatre espaces plutot qu une tabulation : le modele de document
             // n a pas de taquets, et une tabulation reelle s afficherait comme
             // un glyphe manquant de largeur nulle. C est une limite assumee,
@@ -1039,6 +1050,14 @@ void App::run_menu_action(int id) {
         case kActionSelectAll: select_all_text(); break;
         case kActionUndo: undo_edit(); break;
         case kActionRedo: redo_edit(); break;
+        case kActionInsertTable:
+            editor_.insert_table(3, 3);
+            after_edit();
+            break;
+        case kActionDeleteTable:
+            editor_.delete_table();
+            after_edit();
+            break;
 
         case kActionNew: create_new_note(); break;
         case kActionOpen: open_note_via_dialog(); break;
@@ -1097,6 +1116,11 @@ void App::open_main_menu(MenuBarMenu menu) {
             items.push_back(MenuItem::make_separator());
             items.push_back(
                 MenuItem{i18n::tr(i18n::StringId::ActionSelectAll), "Ctrl+A", kActionSelectAll, true, false});
+            items.push_back(MenuItem::make_separator());
+            items.push_back(MenuItem{i18n::tr(i18n::StringId::ActionInsertTable), "", kActionInsertTable,
+                                     true, false});
+            items.push_back(MenuItem{i18n::tr(i18n::StringId::ActionDeleteTable), "", kActionDeleteTable,
+                                     editor_.caret_in_table(), false});
             break;
         }
 

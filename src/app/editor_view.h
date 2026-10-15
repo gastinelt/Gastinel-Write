@@ -44,8 +44,25 @@
 
 namespace gw::app {
 
+struct VisualLine;
+
+// Une cellule d une rangee de tableau : ses lignes de texte, empilees a partir
+// de la marge haute de la cellule. `x` est relatif au debut du contenu.
+struct TableCell {
+    std::size_t paragraph = 0;
+    int x = 0;
+    int width = 0;
+    int padding = 0;
+    std::vector<VisualLine> lines;
+};
+
 // Une ligne telle qu elle est affichee : une tranche d octets d un paragraphe,
 // plus tout ce que la mise en forme lui impose.
+//
+// UNE RANGEE DE TABLEAU EST UNE SEULE LIGNE. Ses cellules, côte à côte, portent
+// chacune leur propre texte : `cells` est alors non vide et begin/end ne
+// servent pas. Ainsi la somme des hauteurs, le defilement et le rail restent
+// ceux d un texte sans tableau.
 struct VisualLine {
     std::size_t paragraph = 0;
     std::size_t begin = 0; // premier octet affiche
@@ -65,6 +82,9 @@ struct VisualLine {
     // liste. Les lignes de continuation sont retraitees sans marqueur, comme
     // dans tout traitement de texte.
     std::string marker;
+
+    // Non vide : cette ligne est une rangee de tableau.
+    std::vector<TableCell> cells;
 };
 
 class EditorView {
@@ -133,6 +153,22 @@ public:
     static doc::CharStyle effective_style(const doc::Paragraph& p, doc::CharStyle style);
 
 private:
+    // Cellule et ligne de texte d une position, a l interieur d une rangee.
+    struct CellSpot {
+        std::size_t cell = 0;
+        std::size_t line = 0;
+    };
+    CellSpot spot_in_row(const VisualLine& row, doc::Position position) const;
+    doc::Position position_in_cell(const doc::TextEdit& edit, const TableCell& cell,
+                                   const VisualLine& line, int x, FontSet& fonts,
+                                   float body_size) const;
+    // Boite du curseur : abscisse, ordonnee du haut et hauteur, en pixels.
+    void caret_box(const doc::TextEdit& edit, doc::Position position, FontSet& fonts,
+                   float body_size, int& x, int& top, int& height) const;
+    // Pose toutes les rangees d un tableau, de `first` a `end` exclu.
+    void layout_table(const doc::TextEdit& edit, std::size_t first, std::size_t end,
+                      FontSet& fonts, float body_size);
+
     std::size_t line_index_for(doc::Position position) const;
     int caret_x_for(const doc::TextEdit& edit, doc::Position position, FontSet& fonts,
                     float body_size) const;

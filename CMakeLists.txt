@@ -124,6 +124,9 @@ add_custom_command(TARGET gastinel_write POST_BUILD
 add_executable(gw_doc_roundtrip
     tools/doc_roundtrip.cpp
     src/doc/style.cpp
+    src/doc/text_edit.cpp
+    src/doc/markdown_live.cpp
+    src/doc/markdown_import.cpp
     src/doc/txt_io.cpp
     src/doc/odt_io.cpp
     src/doc/zip.cpp

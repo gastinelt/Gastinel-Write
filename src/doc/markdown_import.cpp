@@ -7,6 +7,7 @@
 // desynchroniser le texte, et elle garde les invariants de doc/style.h.
 #include "doc/markdown_import.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <string>
 #include <utility>
@@ -207,6 +208,21 @@ bool is_table_rule(const std::string& t) {
     return has_dash;
 }
 
+// Cellules d une ligne de tableau : « | a | b | » -> {"a", "b"}. Le « | » de
+// tete et celui de queue sont facultatifs ; une cellule vide reste une cellule.
+std::vector<std::string> split_cells(const std::string& row) {
+    std::vector<std::string> cells;
+    std::size_t cell = row.empty() || row[0] != '|' ? 0 : 1;
+    while (cell <= row.size()) {
+        std::size_t bar = row.find('|', cell);
+        if (bar == std::string::npos) bar = row.size();
+        cells.push_back(strip(row.substr(cell, bar - cell)));
+        cell = bar + 1;
+    }
+    if (row.size() > 1 && row.back() == '|' && cells.back().empty()) cells.pop_back();
+    return cells;
+}
+
 } // namespace
 
 std::vector<Paragraph> markdown_to_blocks(const std::string& markdown) {
@@ -224,16 +240,23 @@ std::vector<Paragraph> markdown_to_blocks(const std::string& markdown) {
         if (!last_blank) add(Paragraph{});
     };
 
-    std::size_t start = 0;
-    while (true) {
-        std::size_t end = markdown.find('\n', start);
-        const bool last = end == std::string::npos;
-        if (last) end = markdown.size();
+    std::vector<std::string> lines;
+    {
+        std::size_t start = 0;
+        while (true) {
+            const std::size_t end = markdown.find('\n', start);
+            std::string line = markdown.substr(start, end == std::string::npos
+                                                          ? std::string::npos
+                                                          : end - start);
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            lines.push_back(std::move(line));
+            if (end == std::string::npos) break;
+            start = end + 1;
+        }
+    }
 
-        std::string line = markdown.substr(start, end - start);
-        if (!line.empty() && line.back() == '\r') line.pop_back();
-        start = end + 1;
-
+    for (std::size_t li = 0; li < lines.size(); ++li) {
+        const std::string& line = lines[li];
         const std::string t0 = strip(line);
 
         // Bloc de code : les lignes sont du texte brut, sans analyse.
@@ -272,22 +295,39 @@ std::vector<Paragraph> markdown_to_blocks(const std::string& markdown) {
                 } else {
                     add(build(inline_of(t), HeadingLevel::None, ListKind::None));
                 }
-            } else if (t[0] == '|') {
-                if (!is_table_rule(t)) {
-                    // Cellules jointes par « | » : pas de grille dans le modele.
-                    std::string joined;
-                    std::size_t cell = 1;
-                    while (cell <= t.size()) {
-                        std::size_t bar = t.find('|', cell);
-                        if (bar == std::string::npos) bar = t.size();
-                        const std::string value = strip(t.substr(cell, bar - cell));
-                        if (!value.empty()) {
-                            if (!joined.empty()) joined += " | ";
-                            joined += value;
+            } else if (t[0] == '|' && li + 1 < lines.size() &&
+                       is_table_rule(strip(lines[li + 1]))) {
+                // Tableau : la ligne d en-tete, la separation, puis toutes les
+                // lignes qui commencent par « | ». Chaque cellule devient un
+                // paragraphe de tableau (cf. Paragraph::table_id).
+                std::vector<std::vector<std::string>> rows{split_cells(t)};
+                li += 2; // en-tete et separation
+                while (li < lines.size()) {
+                    const std::string row = strip(lines[li]);
+                    if (row.empty() || row[0] != '|') break;
+                    rows.push_back(split_cells(row));
+                    ++li;
+                }
+                --li; // la boucle avancera de nouveau
+
+                std::size_t cols = 0;
+                for (const auto& row : rows) cols = std::max(cols, row.size());
+                for (std::size_t r = 0; r < rows.size(); ++r) {
+                    for (std::size_t c = 0; c < cols; ++c) {
+                        const std::string value = c < rows[r].size() ? rows[r][c] : "";
+                        std::vector<Segment> segments = inline_of(value);
+                        if (r == 0) {
+                            // La premiere ligne est l en-tete : en gras, comme
+                            // dans le rendu Markdown usuel.
+                            for (Segment& seg : segments) seg.style.bold = true;
                         }
-                        cell = bar + 1;
+                        Paragraph cell = build(segments, HeadingLevel::None, ListKind::None);
+                        cell.table_id = 1; // rebase par TextEdit::insert_blocks
+                        cell.table_row = static_cast<std::uint32_t>(r);
+                        cell.table_col = static_cast<std::uint32_t>(c);
+                        cell.table_cols = static_cast<std::uint32_t>(cols);
+                        add(std::move(cell));
                     }
-                    add(build(inline_of(joined), HeadingLevel::None, ListKind::None));
                 }
             } else if (t.size() >= 2 && (t[0] == '-' || t[0] == '*' || t[0] == '+') &&
                        is_blank(t[1])) {
@@ -304,8 +344,6 @@ std::vector<Paragraph> markdown_to_blocks(const std::string& markdown) {
                 }
             }
         }
-
-        if (last) break;
     }
 
     // Les lignes vides de queue ne doivent pas creer d espace en fin de collage.

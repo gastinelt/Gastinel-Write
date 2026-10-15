@@ -3,7 +3,9 @@
 #include "doc/file_bytes.h"
 #include "doc/zip.h"
 
+#include <algorithm>
 #include <cstdint>
+#include <string>
 
 namespace gw::doc {
 namespace {
@@ -150,12 +152,46 @@ std::string paragraph_content(const Paragraph& p) {
     return out;
 }
 
+// Un tableau entier : paragraphes consecutifs de meme `table_id`, ecrits en
+// table:table ODF standard. Une cellule est un <text:p> ordinaire, avec ses
+// spans et ses attributs d alignement, comme tout autre paragraphe.
+std::string table_xml(const std::vector<Paragraph>& paragraphs, std::size_t begin,
+                      std::size_t end, std::size_t number) {
+    const std::uint32_t cols = std::max<std::uint32_t>(paragraphs[begin].table_cols, 1);
+    std::string out = "   <table:table table:name=\"Tableau " + std::to_string(number) + "\">\n";
+    out += "    <table:table-column table:number-columns-repeated=\"" + std::to_string(cols) +
+           "\"/>\n";
+
+    bool row_open = false;
+    for (std::size_t i = begin; i < end; ++i) {
+        const Paragraph& cell = paragraphs[i];
+        cell.ensure_decompressed();
+        if (cell.table_col == 0) {
+            if (row_open) out += "    </table:table-row>\n";
+            out += "    <table:table-row>\n";
+            row_open = true;
+        }
+        out += "     <table:table-cell office:value-type=\"string\">";
+        const std::string attributes = paragraph_attributes(cell);
+        if (cell.text.empty()) {
+            out += "<text:p" + attributes + "/>";
+        } else {
+            out += "<text:p" + attributes + ">" + paragraph_content(cell) + "</text:p>";
+        }
+        out += "</table:table-cell>\n";
+    }
+    if (row_open) out += "    </table:table-row>\n";
+    out += "   </table:table>\n";
+    return out;
+}
+
 std::string build_content_xml(const Document& doc) {
     std::string xml;
     xml += "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n";
     xml += "<office:document-content";
     xml += " xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\"";
     xml += " xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\"";
+    xml += " xmlns:table=\"urn:oasis:names:tc:opendocument:xmlns:table:1.0\"";
     // Espace de noms maison. Les attributs de mise en forme y sont declares
     // plutot que sous text:, fo: ou style: parce quils NE SONT PAS de lODF :
     // les ecrire sous un prefixe ODF les ferait passer pour conformes, et un
@@ -166,7 +202,17 @@ std::string build_content_xml(const Document& doc) {
     xml += " office:version=\"1.2\">\n";
     xml += " <office:body>\n  <office:text>\n";
 
-    for (const Paragraph& p : doc.paragraphs()) {
+    const auto& paragraphs = doc.paragraphs();
+    std::size_t tables = 0;
+    for (std::size_t i = 0; i < paragraphs.size();) {
+        const Paragraph& p = paragraphs[i];
+        if (p.in_table()) {
+            const std::size_t end = table_end(paragraphs, i);
+            xml += table_xml(paragraphs, i, end, ++tables);
+            i = end;
+            continue;
+        }
+        ++i;
         const std::string attributes = paragraph_attributes(p);
         if (p.text.empty()) {
             xml += "   <text:p" + attributes + "/>\n";
@@ -309,6 +355,104 @@ void parse_paragraph_content(const std::string& inner, Paragraph& p) {
     style_normalize(p.spans, p.text.size());
 }
 
+// Un <text:p> dont on connait la position d ouverture `open` dans `xml` : son
+// contenu et ses attributs. Sert aux paragraphes libres comme aux cellules.
+// `end` recoit la position juste apres le </text:p> (ou le /> final).
+Paragraph read_text_p(const std::string& xml, std::size_t open, std::size_t& end) {
+    Paragraph paragraph;
+    const std::size_t tag_end = xml.find('>', open);
+    if (tag_end == std::string::npos) {
+        end = xml.size();
+        return paragraph;
+    }
+    const std::string open_tag = xml.substr(open, tag_end - open + 1);
+    apply_paragraph_attributes(open_tag, paragraph);
+
+    if (xml[tag_end - 1] == '/') {
+        end = tag_end + 1;
+        return paragraph;
+    }
+    const std::size_t close = xml.find("</text:p>", tag_end);
+    if (close == std::string::npos) {
+        end = xml.size();
+        return paragraph;
+    }
+    parse_paragraph_content(xml.substr(tag_end + 1, close - tag_end - 1), paragraph);
+    end = close + 9;
+    return paragraph;
+}
+
+// Vrai si `xml` a, a la position `open`, une balise de nom exact `name` (et non
+// un prefixe comme table:table-row pour table:table).
+bool is_tag_at(const std::string& xml, std::size_t open, const std::string& name) {
+    if (xml.compare(open, name.size(), name) != 0) return false;
+    const std::size_t after = open + name.size();
+    if (after >= xml.size()) return false;
+    const char next = xml[after];
+    return next == '>' || next == '/' || next == ' ' || next == '\t' || next == '\n' ||
+           next == '\r';
+}
+
+// Relit un <table:table> complet, de `open` a `end` exclu. Chaque ligne est
+// rangee dans l ordre ; les lignes plus courtes sont completees de cellules
+// vides, pour que la grille soit rectangulaire comme le modele l exige.
+void read_table(const std::string& xml, std::size_t open, std::size_t close, Document& out) {
+    const std::uint32_t id = next_table_id(out.paragraphs());
+
+    std::vector<std::vector<Paragraph>> rows;
+    std::size_t pos = open;
+    while (true) {
+        const std::size_t row_open = xml.find("<table:table-row", pos);
+        if (row_open == std::string::npos || row_open >= close) break;
+        const std::size_t row_tag_end = xml.find('>', row_open);
+        const std::size_t row_close = xml.find("</table:table-row>", row_open);
+        if (row_tag_end == std::string::npos || row_close == std::string::npos) break;
+        pos = row_close + 18;
+
+        std::vector<Paragraph> row;
+        std::size_t cpos = row_tag_end;
+        while (true) {
+            const std::size_t cell_open = xml.find("<table:table-cell", cpos);
+            if (cell_open == std::string::npos || cell_open >= row_close) break;
+            const std::size_t cell_tag_end = xml.find('>', cell_open);
+            if (cell_tag_end == std::string::npos) break;
+
+            Paragraph cell;
+            if (xml[cell_tag_end - 1] == '/') {
+                cpos = cell_tag_end + 1;
+            } else {
+                const std::size_t cell_close = xml.find("</table:table-cell>", cell_tag_end);
+                if (cell_close == std::string::npos) break;
+                const std::size_t text_open = xml.find("<text:p", cell_tag_end);
+                if (text_open != std::string::npos && text_open < cell_close &&
+                    is_tag_at(xml, text_open, "<text:p")) {
+                    std::size_t unused = 0;
+                    cell = read_text_p(xml, text_open, unused);
+                }
+                cpos = cell_close + 19;
+            }
+            row.push_back(std::move(cell));
+        }
+        rows.push_back(std::move(row));
+    }
+    if (rows.empty()) return;
+
+    std::size_t cols = 0;
+    for (const auto& row : rows) cols = std::max(cols, row.size());
+    if (cols == 0) return;
+
+    for (std::size_t r = 0; r < rows.size(); ++r) {
+        for (std::size_t c = 0; c < cols; ++c) {
+            Paragraph cell = c < rows[r].size() ? std::move(rows[r][c]) : Paragraph{};
+            cell.table_id = id;
+            cell.table_row = static_cast<std::uint32_t>(r);
+            cell.table_col = static_cast<std::uint32_t>(c);
+            cell.table_cols = static_cast<std::uint32_t>(cols);
+            out.paragraphs().push_back(std::move(cell));
+        }
+    }
+}
+
 // Extraction des <text:p> par balayage textuel.
 //
 // Ce nest pas un parseur XML : pas de validation, pas de gestion des espaces
@@ -321,6 +465,20 @@ void extract_paragraphs(const std::string& xml, Document& out) {
     std::size_t pos = 0;
     while (true) {
         const std::size_t open = xml.find("<text:p", pos);
+        // Un tableau est lu d un bloc, et ses cellules ne sont pas des
+        // paragraphes libres : on le saute entierement quand il vient en premier.
+        std::size_t table_open = xml.find("<table:table", pos);
+        while (table_open != std::string::npos && !is_tag_at(xml, table_open, "<table:table")) {
+            table_open = xml.find("<table:table", table_open + 1);
+        }
+        if (table_open != std::string::npos &&
+            (open == std::string::npos || table_open < open)) {
+            const std::size_t table_close = xml.find("</table:table>", table_open);
+            if (table_close == std::string::npos) break;
+            read_table(xml, table_open, table_close, out);
+            pos = table_close + 14;
+            continue;
+        }
         if (open == std::string::npos) break;
 
         // Verifie quon a bien <text:p et non <text:page-number ou autre.

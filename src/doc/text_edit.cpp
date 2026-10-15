@@ -390,8 +390,24 @@ bool TextEdit::delete_selection() {
     const Position end = selection_end();
     auto& paragraphs = document_.paragraphs();
 
+    bool touches_table = false;
+    for (std::size_t i = begin.paragraph; i <= end.paragraph; ++i) {
+        touches_table = touches_table || paragraphs[i].in_table();
+    }
+
     if (begin.paragraph == end.paragraph) {
         paragraph_erase(paragraphs[begin.paragraph], begin.offset, end.offset - begin.offset);
+    } else if (touches_table) {
+        // Une cellule ne fusionne jamais avec sa voisine : la selection vide le
+        // texte de chaque paragraphe qu elle couvre, sans retirer aucun
+        // paragraphe. Les cellules restent donc en place, meme vides.
+        for (std::size_t i = begin.paragraph; i <= end.paragraph; ++i) {
+            Paragraph& p = paragraphs[i];
+            p.ensure_decompressed();
+            const std::size_t from = i == begin.paragraph ? begin.offset : 0;
+            const std::size_t to = i == end.paragraph ? end.offset : p.text.size();
+            if (to > from) paragraph_erase(p, from, to - from);
+        }
     } else {
         // Les paragraphes intermediaires disparaissent, et les deux moities
         // survivantes fusionnent en un seul paragraphe. Le survivant est celui
@@ -425,6 +441,19 @@ void TextEdit::insert_text(const std::string& utf8) {
     push_undo(has_selection() ? EditKind::Other : EditKind::Typing);
     delete_selection();
 
+    // Dans une cellule, pas de saut de ligne : il devient un espace, sinon il
+    // couperait la cellule en deux paragraphes et casserait la grille.
+    std::string flat;
+    const std::string* source = &utf8;
+    if (caret_in_table()) {
+        flat = utf8;
+        for (char& c : flat) {
+            if (c == '\n') c = ' ';
+        }
+        source = &flat;
+    }
+    const std::string& text_in = *source;
+
     // Un texte colle porte ses propres fins de ligne : chaque LF devient une
     // coupure de paragraphe. Sans ce traitement, un collage multiligne
     // insererait des octets 0x0A au milieu d un paragraphe, invisibles a
@@ -436,9 +465,9 @@ void TextEdit::insert_text(const std::string& utf8) {
 
     std::size_t start = 0;
     while (true) {
-        const std::size_t newline = utf8.find('\n', start);
+        const std::size_t newline = text_in.find('\n', start);
         const std::string chunk =
-            utf8.substr(start, newline == std::string::npos ? std::string::npos : newline - start);
+            text_in.substr(start, newline == std::string::npos ? std::string::npos : newline - start);
 
         if (!chunk.empty()) {
             paragraph_insert(document_.paragraphs()[caret_.paragraph], caret_.offset, chunk,
@@ -468,6 +497,21 @@ void TextEdit::insert_text(const std::string& utf8) {
 
 void TextEdit::insert_blocks(std::vector<Paragraph> blocks) {
     if (blocks.empty()) return;
+
+    // Dans une cellule, un collage ne peut pas creer de paragraphes : on ne
+    // garde que le texte, a plat, separe par des espaces.
+    if (caret_in_table()) {
+        std::string joined;
+        for (const Paragraph& block : blocks) {
+            block.ensure_decompressed();
+            if (block.text.empty()) continue;
+            if (!joined.empty()) joined += ' ';
+            joined += block.text;
+        }
+        insert_text(joined);
+        return;
+    }
+
     // Meme regle que insert_text : un collage ferme le groupe d annulation.
     push_undo(EditKind::Other);
     delete_selection();
@@ -485,12 +529,36 @@ void TextEdit::insert_blocks(std::vector<Paragraph> blocks) {
         first = caret_.paragraph;
     }
 
+    // Les tableaux collés gardent leur identifiant, rebase sur le document :
+    // deux tableaux distincts ne doivent jamais partager le meme `table_id`.
+    std::uint32_t id_offset = next_table_id(paragraphs) - 1;
+    for (Paragraph& block : blocks) {
+        if (block.in_table()) block.table_id += id_offset;
+    }
+
     const std::size_t count = blocks.size();
     paragraphs.insert(paragraphs.begin() + static_cast<std::ptrdiff_t>(first),
                       std::make_move_iterator(blocks.begin()),
                       std::make_move_iterator(blocks.end()));
 
     const std::size_t last = first + count - 1;
+    if (paragraphs[last].in_table()) {
+        // La queue ne peut pas se recoller dans une cellule : elle devient un
+        // paragraphe a part, apres le tableau.
+        Paragraph rest = std::move(tail);
+        rest.heading = HeadingLevel::None;
+        rest.list = ListKind::None;
+        rest.align = Alignment::Left;
+        paragraphs.insert(paragraphs.begin() + static_cast<std::ptrdiff_t>(last) + 1,
+                          std::move(rest));
+        caret_ = Position{last + 1, 0};
+        anchor_ = caret_;
+        pending_style_.reset();
+        last_edit_end_ = caret_;
+        document_.set_dirty(true);
+        return;
+    }
+
     Paragraph& tail_host = paragraphs[last];
     const std::size_t join = tail_host.text.size();
     paragraph_append(tail_host, tail);
@@ -503,6 +571,15 @@ void TextEdit::insert_blocks(std::vector<Paragraph> blocks) {
 }
 
 void TextEdit::insert_paragraph_break() {
+    if (caret_in_table()) {
+        // Entree dans une cellule passe a la suivante, sans couper la cellule.
+        push_undo(EditKind::Other);
+        delete_selection();
+        move_cell(false);
+        last_edit_end_ = caret_;
+        return;
+    }
+
     // EditKind::Other : une nouvelle ligne ferme le groupe d annulation en
     // cours. Ctrl+Z apres un paragraphe tape entier remonte au debut de ce
     // paragraphe, pas au debut du texte.
@@ -533,8 +610,14 @@ void TextEdit::erase_backward(bool by_word) {
         return;
     }
 
+    // Debut de cellule : rien a effacer, la cellule precedente reste intacte.
+    if (caret_in_table() && caret_.offset == 0) return;
+
     const Position target = position_left(caret_, by_word);
     if (target == caret_) return; // debut du document : rien a effacer
+    // La frontiere d un tableau ne s efface pas au clavier : on ne fusionne
+    // jamais une cellule avec le paragraphe qui la precede, ni l inverse.
+    if (crosses_table(target)) return;
 
     push_undo(by_word ? EditKind::Other : EditKind::Deleting);
     anchor_ = target;
@@ -550,13 +633,135 @@ void TextEdit::erase_forward(bool by_word) {
         return;
     }
 
+    // Fin de cellule : la suppression ne rapproche pas la cellule suivante.
+    if (caret_in_table() && caret_.offset >= text_at(caret_.paragraph).size()) return;
+
     const Position target = position_right(caret_, by_word);
     if (target == caret_) return;
+    if (crosses_table(target)) return;
 
     push_undo(by_word ? EditKind::Other : EditKind::Deleting);
     anchor_ = target;
     delete_selection();
     last_edit_end_ = caret_;
+}
+
+// --- Tableaux ---------------------------------------------------------------
+
+bool TextEdit::crosses_table(Position target) const {
+    if (target.paragraph == caret_.paragraph) return false;
+    const auto& paragraphs = document_.paragraphs();
+    return paragraphs[target.paragraph].in_table() || caret_in_table();
+}
+
+bool TextEdit::caret_in_table() const {
+    return caret_.paragraph < document_.paragraphs().size() &&
+           document_.paragraphs()[caret_.paragraph].in_table();
+}
+
+void TextEdit::insert_table(std::size_t rows, std::size_t cols) {
+    if (rows == 0 || cols == 0) return;
+    push_undo(EditKind::Other);
+    delete_selection();
+
+    auto& paragraphs = document_.paragraphs();
+    const std::uint32_t id = next_table_id(paragraphs);
+
+    std::vector<Paragraph> block;
+    block.reserve(rows * cols + 1);
+    for (std::size_t r = 0; r < rows; ++r) {
+        for (std::size_t c = 0; c < cols; ++c) {
+            Paragraph cell;
+            cell.table_id = id;
+            cell.table_row = static_cast<std::uint32_t>(r);
+            cell.table_col = static_cast<std::uint32_t>(c);
+            cell.table_cols = static_cast<std::uint32_t>(cols);
+            block.push_back(std::move(cell));
+        }
+    }
+
+    // Le tableau se place apres le paragraphe du curseur, ou apres le tableau
+    // qui le contient. Dans le premier cas, la queue de la ligne passe sous le
+    // tableau, comme pour un saut de ligne.
+    std::size_t at;
+    Paragraph tail;
+    if (caret_in_table()) {
+        at = table_end(paragraphs, caret_.paragraph);
+    } else {
+        tail = paragraph_split(paragraphs[caret_.paragraph], caret_.offset);
+        tail.heading = HeadingLevel::None;
+        tail.list = ListKind::None;
+        tail.align = Alignment::Left;
+        at = caret_.paragraph + 1;
+    }
+    // Toujours un paragraphe apres le tableau : sans lui, le curseur n aurait
+    // nulle part ou aller en sortant de la derniere cellule.
+    block.push_back(std::move(tail));
+
+    paragraphs.insert(paragraphs.begin() + static_cast<std::ptrdiff_t>(at),
+                      std::make_move_iterator(block.begin()),
+                      std::make_move_iterator(block.end()));
+
+    caret_ = Position{at, 0};
+    anchor_ = caret_;
+    pending_style_.reset();
+    last_edit_end_ = caret_;
+    document_.set_dirty(true);
+}
+
+bool TextEdit::move_cell(bool backward) {
+    if (!caret_in_table()) return false;
+    auto& paragraphs = document_.paragraphs();
+    const std::size_t begin = table_begin(paragraphs, caret_.paragraph);
+    const std::size_t end = table_end(paragraphs, caret_.paragraph);
+    const std::uint32_t cols = paragraphs[caret_.paragraph].table_cols;
+
+    if (backward) {
+        if (caret_.paragraph == begin) return false;
+        caret_ = Position{caret_.paragraph - 1, 0};
+    } else if (caret_.paragraph + 1 < end) {
+        caret_ = Position{caret_.paragraph + 1, 0};
+    } else {
+        // Derniere cellule : une ligne vide est ajoutee sous le tableau.
+        push_undo(EditKind::Other);
+        std::vector<Paragraph> row;
+        const std::uint32_t id = paragraphs[caret_.paragraph].table_id;
+        const std::uint32_t last_row = paragraphs[end - 1].table_row;
+        for (std::uint32_t c = 0; c < cols; ++c) {
+            Paragraph cell;
+            cell.table_id = id;
+            cell.table_row = last_row + 1;
+            cell.table_col = c;
+            cell.table_cols = cols;
+            row.push_back(std::move(cell));
+        }
+        paragraphs.insert(paragraphs.begin() + static_cast<std::ptrdiff_t>(end),
+                          std::make_move_iterator(row.begin()),
+                          std::make_move_iterator(row.end()));
+        caret_ = Position{end, 0};
+        document_.set_dirty(true);
+    }
+    anchor_ = caret_;
+    last_edit_end_ = caret_;
+    return true;
+}
+
+bool TextEdit::delete_table() {
+    if (!caret_in_table()) return false;
+    push_undo(EditKind::Other);
+    auto& paragraphs = document_.paragraphs();
+    const std::size_t begin = table_begin(paragraphs, caret_.paragraph);
+    const std::size_t end = table_end(paragraphs, caret_.paragraph);
+    paragraphs.erase(paragraphs.begin() + static_cast<std::ptrdiff_t>(begin),
+                     paragraphs.begin() + static_cast<std::ptrdiff_t>(end));
+    if (paragraphs.empty()) paragraphs.emplace_back();
+
+    const std::size_t at = std::min(begin, paragraphs.size() - 1);
+    caret_ = Position{at, 0};
+    anchor_ = caret_;
+    last_edit_end_ = caret_;
+    document_.set_dirty(true);
+    return true;
 }
 
 // --- Mise en forme ----------------------------------------------------------
@@ -737,13 +942,17 @@ bool TextEdit::apply_markdown_live() {
 
 void TextEdit::set_heading(HeadingLevel level) {
     push_undo(EditKind::Other);
-    for_each_selected_paragraph([level](Paragraph& p) { p.heading = level; });
+    for_each_selected_paragraph([level](Paragraph& p) {
+        if (!p.in_table()) p.heading = level;
+    });
     document_.set_dirty(true);
 }
 
 void TextEdit::set_list(ListKind kind) {
     push_undo(EditKind::Other);
-    for_each_selected_paragraph([kind](Paragraph& p) { p.list = kind; });
+    for_each_selected_paragraph([kind](Paragraph& p) {
+        if (!p.in_table()) p.list = kind;
+    });
     document_.set_dirty(true);
 }
 

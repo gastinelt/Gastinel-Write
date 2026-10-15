@@ -16,7 +16,8 @@
 //   [texte](url), ![alt](url) -> texte seul, l URL est perdue
 //   > citation                -> texte seul, sans le marqueur
 //   ``` blocs de code        -> lignes en texte brut, sans mise en forme
-//   lignes de tableau |a|b|   -> cellules jointes par « | », separateur ignore
+//   tableau (en-tete, separation, lignes |a|b|) -> une cellule par paragraphe de
+//                               tableau ; la premiere ligne est en gras
 //   ---  (regle)             -> ligne vide
 //
 // Les formes douteuses restent du texte : un `_` au milieu d un mot, un `*`

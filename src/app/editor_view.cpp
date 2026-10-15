@@ -28,6 +28,8 @@ constexpr float kListIndentEm = 1.6f;
 // comme aujourd hui. Sans elle, un titre qui suit un paragraphe ne se detache
 // pas de lui, et la hierarchie ne se lit plus.
 constexpr float kHeadingSpaceAbove = 0.45f;
+// Marge interne d une cellule de tableau, en fraction du corps de texte.
+constexpr float kCellPaddingEm = 0.35f;
 
 // Largeur ajoutee a la fin d une ligne dont la selection se poursuit.
 // Sans elle, une selection multi-lignes s arreterait pile au dernier glyphe et
@@ -192,6 +194,102 @@ FontFace metrics_face(const doc::Paragraph& p, FontSet& fonts, float pixel_size)
     return fonts.face(std::string(), p.heading != doc::HeadingLevel::None, false, pixel_size);
 }
 
+// Met un paragraphe en lignes, dans une colonne de `wrap_width` pixels. Une
+// seule regle de coupure et d alignement, pour le texte courant comme pour les
+// cellules d un tableau.
+std::vector<VisualLine> wrap_paragraph(std::size_t p, const doc::Paragraph& paragraph,
+                                       FontSet& fonts, float size, int wrap_width, int indent,
+                                       int space_above, int height_of_line, int ascent_of_line) {
+    paragraph.ensure_decompressed();
+    std::vector<VisualLine> p_lines;
+    const auto push_line = [&](std::size_t begin, std::size_t end, bool continues) {
+        VisualLine line;
+        line.paragraph = p;
+        line.begin = begin;
+        line.end = end;
+        line.continues = continues;
+        line.height = height_of_line;
+        line.ascent = ascent_of_line;
+        line.indent = indent;
+        if (p_lines.empty()) {
+            line.height += space_above;
+            line.ascent += space_above;
+            line.space_above = space_above;
+        }
+        p_lines.push_back(std::move(line));
+    };
+
+    if (paragraph.text.empty()) {
+        // Un paragraphe vide occupe quand meme une ligne : c est une ligne
+        // blanche a l ecran, et le curseur doit pouvoir s y poser.
+        push_line(0, 0, false);
+    } else {
+        std::size_t line_begin = 0;
+        std::size_t last_break = std::string::npos; // premier octet apres la coupure
+        int width_so_far = 0;
+        std::size_t i = 0;
+
+        while (i < paragraph.text.size()) {
+            const std::size_t glyph_begin = i;
+            const std::uint32_t cp = render::next_codepoint(paragraph.text, i);
+            const doc::CharStyle style = style_of(paragraph, glyph_begin);
+            const FontFace face = fonts.face(style.font, style.bold, style.italic, size);
+            const render::AtlasEntry* entry = face.atlas->get_or_insert(*face.font, cp);
+            const int advance = entry != nullptr ? entry->advance : 0;
+
+            if (width_so_far + advance > wrap_width && glyph_begin > line_begin) {
+                // Coupure au dernier point de coupure vu, sinon en plein
+                // mot : un mot plus large que la colonne doit quand meme
+                // s afficher, faute de quoi la boucle n avancerait pas.
+                const bool at_word = last_break != std::string::npos && last_break > line_begin;
+                const std::size_t cut = at_word ? last_break : glyph_begin;
+                push_line(line_begin, cut, line_begin != 0);
+                line_begin = cut;
+                last_break = std::string::npos;
+                width_so_far = 0;
+                i = cut; // on reprend a la coupure : les glyphes sautes seront remesures
+                continue;
+            }
+
+            width_so_far += advance;
+            if (is_break_opportunity(cp)) last_break = i;
+        }
+        push_line(line_begin, paragraph.text.size(), line_begin != 0);
+    }
+
+    // Alignement : il ne se calcule qu une fois les coupures connues, et
+    // uniquement pour les paragraphes qui ne sont pas a gauche — mesurer
+    // chaque ligne une seconde fois n a pas de raison d etre payee par le
+    // cas courant.
+    if (paragraph.align != doc::Alignment::Left) {
+        for (VisualLine& line : p_lines) {
+            const int line_width =
+                measure_styled(paragraph, line.begin, line.end, fonts, size);
+            const int free_space = std::max(0, wrap_width - line_width);
+            line.offset_x =
+                paragraph.align == doc::Alignment::Center ? free_space / 2 : free_space;
+        }
+    }
+    return p_lines;
+}
+
+// Cellule d une rangee situee sous l abscisse `rel_x`, relative au contenu. Une
+// abscisse hors de la rangee vise la premiere ou la derniere cellule.
+std::size_t cell_index_at_x(const VisualLine& row, int rel_x) {
+    for (std::size_t c = 0; c < row.cells.size(); ++c) {
+        if (rel_x < row.cells[c].x + row.cells[c].width) return c;
+    }
+    return row.cells.empty() ? 0 : row.cells.size() - 1;
+}
+
+// Ordonnee du haut d une ligne de cellule, relative au haut de la rangee : la
+// marge, puis la somme des hauteurs des lignes qui precedent.
+int cell_line_top(const TableCell& cell, std::size_t index) {
+    int y = cell.padding;
+    for (std::size_t i = 0; i < index && i < cell.lines.size(); ++i) y += cell.lines[i].height;
+    return y;
+}
+
 } // namespace
 
 void EditorView::layout(const doc::TextEdit& edit, int width, int height, int top_offset,
@@ -223,6 +321,16 @@ void EditorView::layout(const doc::TextEdit& edit, int width, int height, int to
     for (std::size_t p = 0; p < paragraphs.size(); ++p) {
         paragraph_first_line_[p] = lines_.size();
         const doc::Paragraph& paragraph = paragraphs[p];
+
+        if (paragraph.in_table()) {
+            // Un tableau est une suite de rangees : layout_table les pose d un
+            // coup, et la boucle reprend apres la derniere cellule.
+            const std::size_t end = doc::table_end(paragraphs, p);
+            layout_table(edit, p, end, fonts, body_size);
+            number = 0;
+            p = end - 1;
+            continue;
+        }
         const float size = body_size * heading_scale(paragraph.heading);
 
         const FontFace metrics = metrics_face(paragraph, fonts, size);
@@ -269,76 +377,9 @@ void EditorView::layout(const doc::TextEdit& edit, int width, int height, int to
             continue;
         }
 
-        paragraph.ensure_decompressed();
-        std::vector<VisualLine> p_lines;
-        const auto push_line = [&](std::size_t begin, std::size_t end, bool continues) {
-            VisualLine line;
-            line.paragraph = p;
-            line.begin = begin;
-            line.end = end;
-            line.continues = continues;
-            line.height = height_of_line;
-            line.ascent = ascent_of_line;
-            line.indent = indent;
-            if (p_lines.empty()) {
-                line.height += space_above;
-                line.ascent += space_above;
-                line.space_above = space_above;
-            }
-            p_lines.push_back(std::move(line));
-        };
-
-        if (paragraph.text.empty()) {
-            // Un paragraphe vide occupe quand meme une ligne : c est une ligne
-            // blanche a l ecran, et le curseur doit pouvoir s y poser.
-            push_line(0, 0, false);
-        } else {
-            std::size_t line_begin = 0;
-            std::size_t last_break = std::string::npos; // premier octet apres la coupure
-            int width_so_far = 0;
-            std::size_t i = 0;
-
-            while (i < paragraph.text.size()) {
-                const std::size_t glyph_begin = i;
-                const std::uint32_t cp = render::next_codepoint(paragraph.text, i);
-                const doc::CharStyle style = style_of(paragraph, glyph_begin);
-                const FontFace face = fonts.face(style.font, style.bold, style.italic, size);
-                const render::AtlasEntry* entry = face.atlas->get_or_insert(*face.font, cp);
-                const int advance = entry != nullptr ? entry->advance : 0;
-
-                if (width_so_far + advance > wrap_width && glyph_begin > line_begin) {
-                    // Coupure au dernier point de coupure vu, sinon en plein
-                    // mot : un mot plus large que la colonne doit quand meme
-                    // s afficher, faute de quoi la boucle n avancerait pas.
-                    const bool at_word = last_break != std::string::npos && last_break > line_begin;
-                    const std::size_t cut = at_word ? last_break : glyph_begin;
-                    push_line(line_begin, cut, line_begin != 0);
-                    line_begin = cut;
-                    last_break = std::string::npos;
-                    width_so_far = 0;
-                    i = cut; // on reprend a la coupure : les glyphes sautes seront remesures
-                    continue;
-                }
-
-                width_so_far += advance;
-                if (is_break_opportunity(cp)) last_break = i;
-            }
-            push_line(line_begin, paragraph.text.size(), line_begin != 0);
-        }
-
-        // Alignement : il ne se calcule qu une fois les coupures connues, et
-        // uniquement pour les paragraphes qui ne sont pas a gauche — mesurer
-        // chaque ligne une seconde fois n a pas de raison d etre payee par le
-        // cas courant.
-        if (paragraph.align != doc::Alignment::Left) {
-            for (VisualLine& line : p_lines) {
-                const int line_width =
-                    measure_styled(paragraph, line.begin, line.end, fonts, size);
-                const int free_space = std::max(0, wrap_width - line_width);
-                line.offset_x =
-                    paragraph.align == doc::Alignment::Center ? free_space / 2 : free_space;
-            }
-        }
+        std::vector<VisualLine> p_lines =
+            wrap_paragraph(p, paragraph, fonts, size, wrap_width, indent, space_above,
+                           height_of_line, ascent_of_line);
 
         // Sauvegarde dans le cache
         paragraph_cache_[p].version = paragraph.version;
@@ -362,6 +403,59 @@ void EditorView::layout(const doc::TextEdit& edit, int width, int height, int to
 
 // --- Correspondance position <-> ligne -------------------------------------
 
+void EditorView::layout_table(const doc::TextEdit& edit, std::size_t first, std::size_t end,
+                              FontSet& fonts, float body_size) {
+    const auto& paragraphs = edit.document().paragraphs();
+    const int cols = static_cast<int>(std::max<std::uint32_t>(paragraphs[first].table_cols, 1));
+    const int col_width = std::max(1, content_width_ / cols);
+    const int padding = std::max(4, static_cast<int>(body_size * kCellPaddingEm));
+    const int wrap_width = std::max(1, col_width - 2 * padding);
+
+    std::size_t p = first;
+    while (p < end) {
+        const std::uint32_t row_number = paragraphs[p].table_row;
+        VisualLine row;
+        row.paragraph = p;
+        const std::size_t row_index = lines_.size();
+
+        int tallest = 0;
+        int first_ascent = 0;
+        bool first_cell = true;
+        while (p < end && paragraphs[p].table_row == row_number) {
+            const doc::Paragraph& paragraph = paragraphs[p];
+            paragraph_first_line_[p] = row_index;
+
+            const FontFace metrics = metrics_face(paragraph, fonts, body_size);
+            const int height_of_line = std::max(1, render::line_height(*metrics.font, body_size));
+            const int ascent_of_line = render::ascent_pixels(*metrics.font, body_size);
+
+            TableCell cell;
+            cell.paragraph = p;
+            cell.x = static_cast<int>(paragraph.table_col) * col_width;
+            cell.width = col_width;
+            cell.padding = padding;
+            cell.lines = wrap_paragraph(p, paragraph, fonts, body_size, wrap_width, 0, 0,
+                                        height_of_line, ascent_of_line);
+
+            const int cell_height = cell_line_top(cell, cell.lines.size());
+            tallest = std::max(tallest, cell_height + padding);
+            if (first_cell) {
+                first_ascent = padding + cell.lines.front().ascent;
+                first_cell = false;
+            }
+            row.cells.push_back(std::move(cell));
+            ++p;
+        }
+
+        // Une rangee tient au moins une ligne de corps, marges comprises : une
+        // cellule vide garde ainsi une hauteur utilisable pour y placer le curseur.
+        const int min_height = line_height_ + 2 * padding;
+        row.height = std::max(tallest, min_height) + 1; // +1 : filet bas de la rangee
+        row.ascent = first_ascent;
+        lines_.push_back(std::move(row));
+    }
+}
+
 std::size_t EditorView::line_index_for(doc::Position position) const {
     if (lines_.empty()) return 0;
     const std::size_t start = (position.paragraph < paragraph_first_line_.size())
@@ -369,6 +463,15 @@ std::size_t EditorView::line_index_for(doc::Position position) const {
                                   : 0;
     for (std::size_t i = start; i < lines_.size(); ++i) {
         const VisualLine& line = lines_[i];
+        if (!line.cells.empty()) {
+            // Une rangee porte plusieurs paragraphes : elle contient la position
+            // si l un de ses paragraphes de cellule est celui visé.
+            for (const TableCell& cell : line.cells) {
+                if (cell.paragraph == position.paragraph) return i;
+            }
+            if (line.paragraph > position.paragraph) break;
+            continue;
+        }
         if (line.paragraph != position.paragraph) {
             if (line.paragraph > position.paragraph) break;
             continue;
@@ -392,10 +495,34 @@ int EditorView::line_top(std::size_t index) const {
     return y;
 }
 
+EditorView::CellSpot EditorView::spot_in_row(const VisualLine& row,
+                                             doc::Position position) const {
+    CellSpot spot;
+    for (std::size_t c = 0; c < row.cells.size(); ++c) {
+        if (row.cells[c].paragraph != position.paragraph) continue;
+        spot.cell = c;
+        const TableCell& cell = row.cells[c];
+        for (std::size_t l = 0; l < cell.lines.size(); ++l) {
+            spot.line = l;
+            if (position.offset < cell.lines[l].end) return spot;
+        }
+        spot.line = cell.lines.empty() ? 0 : cell.lines.size() - 1;
+        return spot;
+    }
+    return spot;
+}
+
 int EditorView::caret_x_for(const doc::TextEdit& edit, doc::Position position, FontSet& fonts,
                             float body_size) const {
     if (lines_.empty()) return content_x_;
     const VisualLine& line = lines_[line_index_for(position)];
+    if (!line.cells.empty()) {
+        int x = 0;
+        int top = 0;
+        int height = 0;
+        caret_box(edit, position, fonts, body_size, x, top, height);
+        return x;
+    }
     const doc::Paragraph& paragraph = edit.document().paragraphs()[line.paragraph];
     const float size = body_size * heading_scale(paragraph.heading);
     const std::size_t offset = std::clamp(position.offset, line.begin, line.end);
@@ -403,10 +530,53 @@ int EditorView::caret_x_for(const doc::TextEdit& edit, doc::Position position, F
            measure_styled(paragraph, line.begin, offset, fonts, size);
 }
 
+void EditorView::caret_box(const doc::TextEdit& edit, doc::Position position, FontSet& fonts,
+                           float body_size, int& x, int& top, int& height) const {
+    if (lines_.empty()) {
+        x = content_x_;
+        top = content_y_;
+        height = line_height_;
+        return;
+    }
+    const std::size_t index = line_index_for(position);
+    const VisualLine& line = lines_[index];
+    if (!line.cells.empty()) {
+        const CellSpot spot = spot_in_row(line, position);
+        const TableCell& cell = line.cells[spot.cell];
+        const VisualLine& sub = cell.lines[spot.line];
+        const doc::Paragraph& paragraph = edit.document().paragraphs()[cell.paragraph];
+        const std::size_t offset = std::clamp(position.offset, sub.begin, sub.end);
+        x = content_x_ + cell.x + cell.padding + sub.indent + sub.offset_x +
+            measure_styled(paragraph, sub.begin, offset, fonts, body_size);
+        top = line_top(index) + cell_line_top(cell, spot.line);
+        height = std::max(1, sub.height);
+        return;
+    }
+    x = caret_x_for(edit, position, fonts, body_size);
+    top = line_top(index) + line.space_above;
+    height = std::max(1, line.height - line.space_above);
+}
+
+doc::Position EditorView::position_in_cell(const doc::TextEdit& edit, const TableCell& cell,
+                                           const VisualLine& line, int x, FontSet& fonts,
+                                           float body_size) const {
+    const doc::Paragraph& paragraph = edit.document().paragraphs()[cell.paragraph];
+    const std::size_t offset = offset_at_x_styled(
+        paragraph, line.begin, line.end,
+        x - content_x_ - cell.x - cell.padding - line.indent - line.offset_x, fonts, body_size);
+    return doc::Position{cell.paragraph, offset};
+}
+
 doc::Position EditorView::position_on_line(const doc::TextEdit& edit, std::size_t line_index,
                                            int x, FontSet& fonts, float body_size) const {
     if (lines_.empty()) return doc::Position{};
     const VisualLine& line = lines_[std::min(line_index, lines_.size() - 1)];
+    if (!line.cells.empty()) {
+        // Sans hauteur de visee, on prend la premiere ligne de la cellule
+        // situee sous l abscisse demandee.
+        const TableCell& cell = line.cells[cell_index_at_x(line, x - content_x_)];
+        return position_in_cell(edit, cell, cell.lines.front(), x, fonts, body_size);
+    }
     const doc::Paragraph& paragraph = edit.document().paragraphs()[line.paragraph];
     const float size = body_size * heading_scale(paragraph.heading);
     const std::size_t offset =
@@ -435,6 +605,22 @@ doc::Position EditorView::position_at_point(const doc::TextEdit& edit, int x, in
             top += lines_[i].height;
         }
     }
+    const VisualLine& row = lines_[index];
+    if (!row.cells.empty()) {
+        // Dans une rangee, la cellule vient de l abscisse, et la ligne de texte
+        // de l ordonnee, mesuree depuis le haut de la rangee.
+        const int row_top = line_top(index);
+        const TableCell& cell = row.cells[cell_index_at_x(row, x - content_x_)];
+        // Ligne de texte visee : la premiere dont le bas depasse l ordonnee.
+        std::size_t best = cell.lines.size() - 1;
+        for (std::size_t l = 0; l < cell.lines.size(); ++l) {
+            if (y < row_top + cell_line_top(cell, l + 1)) {
+                best = l;
+                break;
+            }
+        }
+        return position_in_cell(edit, cell, cell.lines[best], x, fonts, body_size);
+    }
     return position_on_line(edit, index, x, fonts, body_size);
 }
 
@@ -451,13 +637,47 @@ doc::Position EditorView::position_above(const doc::TextEdit& edit, FontSet& fon
     const int x = resolve_desired_x(edit, fonts, body_size);
     const std::size_t line = line_index_for(edit.caret());
     if (line == 0) return doc::Position{0, 0}; // deja en haut : on va au tout debut
+
+    if (!lines_[line].cells.empty()) {
+        // Dans un tableau, Haut reste dans la cellule tant qu une ligne de texte
+        // la precede, puis passe a la rangee du dessus, dans la meme colonne.
+        const VisualLine& row = lines_[line];
+        const CellSpot spot = spot_in_row(row, edit.caret());
+        const TableCell& cell = row.cells[spot.cell];
+        if (spot.line > 0) {
+            return position_in_cell(edit, cell, cell.lines[spot.line - 1], x, fonts, body_size);
+        }
+        if (!lines_[line - 1].cells.empty()) {
+            const VisualLine& above = lines_[line - 1];
+            const TableCell& target = above.cells[std::min(spot.cell, above.cells.size() - 1)];
+            return position_in_cell(edit, target, target.lines.back(), x, fonts, body_size);
+        }
+    }
     return position_on_line(edit, line - 1, x, fonts, body_size);
 }
 
 doc::Position EditorView::position_below(const doc::TextEdit& edit, FontSet& fonts,
                                          float body_size) const {
+    if (lines_.empty()) return edit.caret();
     const int x = resolve_desired_x(edit, fonts, body_size);
     const std::size_t line = line_index_for(edit.caret());
+
+    if (!lines_[line].cells.empty()) {
+        // Symetrique de position_above : ligne suivante de la cellule, puis
+        // rangee du dessous dans la meme colonne.
+        const VisualLine& row = lines_[line];
+        const CellSpot spot = spot_in_row(row, edit.caret());
+        const TableCell& cell = row.cells[spot.cell];
+        if (spot.line + 1 < cell.lines.size()) {
+            return position_in_cell(edit, cell, cell.lines[spot.line + 1], x, fonts, body_size);
+        }
+        if (line + 1 < lines_.size() && !lines_[line + 1].cells.empty()) {
+            const VisualLine& below = lines_[line + 1];
+            const TableCell& target = below.cells[std::min(spot.cell, below.cells.size() - 1)];
+            return position_in_cell(edit, target, target.lines.front(), x, fonts, body_size);
+        }
+    }
+
     if (line + 1 >= lines_.size()) {
         const std::size_t last = edit.document().paragraphs().size() - 1;
         return doc::Position{last, edit.document().paragraphs()[last].text.size()};
@@ -478,12 +698,22 @@ doc::Position EditorView::position_page(const doc::TextEdit& edit, FontSet& font
 doc::Position EditorView::line_start(const doc::TextEdit& edit) const {
     if (lines_.empty()) return doc::Position{};
     const VisualLine& line = lines_[line_index_for(edit.caret())];
+    if (!line.cells.empty()) {
+        const CellSpot spot = spot_in_row(line, edit.caret());
+        const TableCell& cell = line.cells[spot.cell];
+        return doc::Position{cell.paragraph, cell.lines[spot.line].begin};
+    }
     return doc::Position{line.paragraph, line.begin};
 }
 
 doc::Position EditorView::line_end(const doc::TextEdit& edit) const {
     if (lines_.empty()) return doc::Position{};
     const VisualLine& line = lines_[line_index_for(edit.caret())];
+    if (!line.cells.empty()) {
+        const CellSpot spot = spot_in_row(line, edit.caret());
+        const TableCell& cell = line.cells[spot.cell];
+        return doc::Position{cell.paragraph, cell.lines[spot.line].end};
+    }
     return doc::Position{line.paragraph, line.end};
 }
 
@@ -558,11 +788,10 @@ void EditorView::update_caret_target(const doc::TextEdit& edit, FontSet& fonts, 
         return;
     }
 
-    const int target_x = caret_x_for(edit, edit.caret(), fonts, body_size);
-    const int top = line_top(line);
-    const VisualLine& target = lines_[line];
-    const int target_y = top + target.space_above;
-    const int target_h = std::max(1, target.height - target.space_above);
+    int target_x = 0;
+    int target_y = 0;
+    int target_h = 0;
+    caret_box(edit, edit.caret(), fonts, body_size, target_x, target_y, target_h);
 
     if (!smooth_enabled || anim_caret_x_ < 0.0f) {
         anim_caret_x_ = static_cast<float>(target_x);
@@ -654,9 +883,67 @@ void EditorView::draw(render::Framebuffer& fb, const doc::TextEdit& edit, FontSe
         if (last == first_line_ && first_line_ < lines_.size()) last = first_line_ + 1;
     }
 
+    // Une rangee de tableau : filets, puis le texte et la selection de chaque
+    // cellule, dans sa colonne. Les lignes de texte d une cellule s empilent
+    // a partir de la marge haute de la rangee.
+    const auto draw_table_row = [&](const VisualLine& row, int top) {
+        const int bottom = top + row.height - 1;
+        for (const TableCell& cell : row.cells) {
+            const doc::Paragraph& paragraph = paragraphs[cell.paragraph];
+            const int left = content_x_ + cell.x;
+            const int right = left + cell.width - 1;
+            render::fill_rect(fb, left, top, cell.width, 1, palette.separator);
+            render::fill_rect(fb, left, bottom, cell.width, 1, palette.separator);
+            render::fill_rect(fb, left, top, 1, row.height, palette.separator);
+            render::fill_rect(fb, right, top, 1, row.height, palette.separator);
+
+            int line_top_y = top + cell.padding;
+            for (const VisualLine& sub : cell.lines) {
+                const int text_x = left + cell.padding + sub.indent + sub.offset_x;
+                const int baseline = line_top_y + sub.ascent;
+                if (sub.begin != sub.end) {
+                    draw_styled(fb, paragraph, sub.begin, sub.end, text_x, baseline, fonts,
+                                body_size, palette.foreground);
+                }
+                if (has_selection) {
+                    const doc::Position from_pos{cell.paragraph, sub.begin};
+                    const doc::Position to_pos{cell.paragraph, sub.end};
+                    if (!(to_pos < sel_begin || sel_end < from_pos)) {
+                        const std::size_t from = sel_begin.paragraph == cell.paragraph
+                                                     ? std::max(sel_begin.offset, sub.begin)
+                                                     : sub.begin;
+                        const std::size_t to = sel_end.paragraph == cell.paragraph
+                                                   ? std::min(sel_end.offset, sub.end)
+                                                   : sub.end;
+                        if (from <= to) {
+                            const int x0 =
+                                text_x + measure_styled(paragraph, sub.begin, from, fonts, body_size);
+                            const int x1 =
+                                text_x + measure_styled(paragraph, sub.begin, to, fonts, body_size);
+                            if (x1 > x0) {
+                                render::fill_rect(fb, x0, line_top_y, x1 - x0, sub.height,
+                                                  palette.selection_fill);
+                                if (from != to) {
+                                    draw_styled(fb, paragraph, from, to, x0, baseline, fonts,
+                                                body_size, palette.selection_text);
+                                }
+                            }
+                        }
+                    }
+                }
+                line_top_y += sub.height;
+            }
+        }
+    };
+
     int y = content_y_;
     for (std::size_t i = first_line_; i < last; ++i) {
         const VisualLine& line = lines_[i];
+        if (!line.cells.empty()) {
+            draw_table_row(line, y);
+            y += line.height;
+            continue;
+        }
         const doc::Paragraph& paragraph = paragraphs[line.paragraph];
         const float size = body_size * heading_scale(paragraph.heading);
         const int text_x = content_x_ + line.indent + line.offset_x;
@@ -738,7 +1025,6 @@ void EditorView::draw(render::Framebuffer& fb, const doc::TextEdit& edit, FontSe
         const std::size_t line = line_index_for(edit.caret());
         if (line >= first_line_ && line < last) {
             const bool on_band = edit.has_selection() && edit.caret() == sel_begin;
-            const VisualLine& target = lines_[line];
             int x = 0;
             int top = 0;
             int h = 0;
@@ -747,9 +1033,7 @@ void EditorView::draw(render::Framebuffer& fb, const doc::TextEdit& edit, FontSe
                 top = static_cast<int>(std::round(anim_caret_y_));
                 h = static_cast<int>(std::round(anim_caret_h_));
             } else {
-                x = caret_x_for(edit, edit.caret(), fonts, body_size);
-                top = line_top(line) + target.space_above;
-                h = std::max(1, target.height - target.space_above);
+                caret_box(edit, edit.caret(), fonts, body_size, x, top, h);
             }
 
             render::fill_rect(fb, x, top, kCaretWidth, std::max(1, h),
@@ -788,6 +1072,8 @@ void EditorView::draw(render::Framebuffer& fb, const doc::TextEdit& edit, FontSe
         for (std::size_t p = 0; p < paragraphs.size(); ++p) {
             if (p >= safe_min && p <= safe_max) continue;
             if (p == caret_p) continue;
+            // Une cellule reste en memoire : sa rangee est dessinee d un bloc.
+            if (paragraphs[p].in_table()) continue;
             if (!paragraphs[p].is_compressed() && paragraphs[p].text.size() >= 64) {
                 paragraphs[p].compress();
             }

@@ -166,6 +166,10 @@ Paragraph::Paragraph(const Paragraph& other) {
     list = other.list;
     align = other.align;
     spans = other.spans;
+    table_id = other.table_id;
+    table_row = other.table_row;
+    table_col = other.table_col;
+    table_cols = other.table_cols;
     version = other.version;
     compressed_text = other.compressed_text;
     uncompressed_size = other.uncompressed_size;
@@ -179,6 +183,10 @@ Paragraph& Paragraph::operator=(const Paragraph& other) {
         list = other.list;
         align = other.align;
         spans = other.spans;
+        table_id = other.table_id;
+        table_row = other.table_row;
+        table_col = other.table_col;
+        table_cols = other.table_cols;
         version = other.version;
         compressed_text = other.compressed_text;
         uncompressed_size = other.uncompressed_size;
@@ -316,6 +324,30 @@ void paragraph_append(Paragraph& p, const Paragraph& tail) {
     p.text += tail.text;
     style_normalize(work, p.text.size());
     p.spans = std::move(work);
+}
+
+std::size_t table_begin(const std::vector<Paragraph>& paragraphs, std::size_t index) {
+    if (index >= paragraphs.size() || !paragraphs[index].in_table()) return index;
+    const std::uint32_t id = paragraphs[index].table_id;
+    std::size_t first = index;
+    while (first > 0 && paragraphs[first - 1].table_id == id) --first;
+    return first;
+}
+
+std::size_t table_end(const std::vector<Paragraph>& paragraphs, std::size_t index) {
+    if (index >= paragraphs.size() || !paragraphs[index].in_table()) return index + 1;
+    const std::uint32_t id = paragraphs[index].table_id;
+    std::size_t after = index + 1;
+    while (after < paragraphs.size() && paragraphs[after].table_id == id) ++after;
+    return after;
+}
+
+std::uint32_t next_table_id(const std::vector<Paragraph>& paragraphs) {
+    std::uint32_t highest = 0;
+    for (const Paragraph& p : paragraphs) {
+        if (p.table_id > highest) highest = p.table_id;
+    }
+    return highest + 1;
 }
 
 } // namespace gw::doc

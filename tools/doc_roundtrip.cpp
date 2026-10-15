@@ -9,6 +9,7 @@
 #include "doc/document.h"
 #include "doc/odt_io.h"
 #include "doc/style.h"
+#include "doc/text_edit.h"
 #include "doc/txt_io.h"
 #include "doc/zip.h"
 
@@ -41,6 +42,10 @@ bool same(const gw::doc::Document& a, const gw::doc::Document& b) {
         const gw::doc::Paragraph& y = b.paragraphs()[i];
         if (x.text != y.text) return false;
         if (x.heading != y.heading || x.list != y.list || x.align != y.align) return false;
+        if (x.table_id != y.table_id || x.table_row != y.table_row || x.table_col != y.table_col ||
+            x.table_cols != y.table_cols) {
+            return false;
+        }
         if (x.spans.size() != y.spans.size()) return false;
         for (std::size_t k = 0; k < x.spans.size(); ++k) {
             if (!(x.spans[k] == y.spans[k])) return false;
@@ -151,6 +156,33 @@ int main(int argc, char** argv) {
         check(equal, "ODT : round-trip identique");
         if (!equal) {
             dump("attendu", original);
+            dump("obtenu", reloaded);
+        }
+    }
+
+    // --- Tableau : grille, cellules vides, mise en forme, texte avant et apres ---
+    {
+        gw::doc::Document with_table = make_document({"avant", "", "apres"});
+        gw::doc::TextEdit edit;
+        edit.reset(with_table);
+        edit.set_caret(gw::doc::Position{1, 0}, false);
+        edit.insert_table(2, 3);
+        edit.insert_text("cellule");
+        edit.move_cell(false);
+        edit.toggle_bold();
+        edit.insert_text("gras");
+        const gw::doc::Document table_doc = edit.document();
+
+        const std::string path = dir + "/roundtrip_table.odt";
+        check(gw::doc::save_odt(path, table_doc, error), "save_odt (tableau) : ecriture " + error);
+
+        gw::doc::Document reloaded;
+        const bool loaded = gw::doc::load_odt(path, reloaded, error);
+        check(loaded, "load_odt (tableau) : lecture " + (loaded ? std::string() : error));
+        const bool equal = same(table_doc, reloaded);
+        check(equal, "ODT : le tableau survit a l aller-retour a l identique");
+        if (!equal) {
+            dump("attendu", table_doc);
             dump("obtenu", reloaded);
         }
     }

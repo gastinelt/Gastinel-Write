@@ -44,6 +44,11 @@ constexpr const char* kTranslations[static_cast<std::size_t>(StringId::Count)][s
     // ActionToggleKeyboard
     {"Mode clavier (Markdown live)", "Keyboard mode (Markdown live)", "Modo teclado (Markdown live)", "Tastaturmodus (Markdown live)", "Modalità tastiera (Markdown live)", "Modo teclado (Markdown live)", "Toetsenbordmodus (Markdown live)", "Tryb klawiatury (Markdown live)", "Режим клавиатуры (Markdown live)", "Klavye modu (Markdown live)"},
 
+    // ActionInsertTable
+    {"Insérer un tableau", "Insert table", "Insertar tabla", "Tabelle einfügen", "Inserisci tabella", "Inserir tabela", "Tabel invoegen", "Wstaw tabelę", "Вставить таблицу", "Tablo ekle"},
+    // ActionDeleteTable
+    {"Supprimer le tableau", "Delete table", "Eliminar tabla", "Tabelle löschen", "Elimina tabella", "Excluir tabela", "Tabel verwijderen", "Usuń tabelę", "Удалить таблицу", "Tabloyu sil"},
+
     // HomeTagline
     {"L'écriture, sans fard.", "Writing, unadorned.", "La escritura, sin artificios.", "Schreiben, unverfälscht.", "La scrittura, senza orpelli.", "A escrita, sem artifícios.", "Schrijven, ongekleed.", "Pisanie, bez zbędnych ozdób.", "Письмо, без прикрас.", "Yazı, süssüz."},
     // HomeNewNote

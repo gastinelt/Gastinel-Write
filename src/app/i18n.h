@@ -37,6 +37,8 @@ enum class StringId {
     ActionSelectAll,
     ActionToggleDark,
     ActionToggleKeyboard,
+    ActionInsertTable,
+    ActionDeleteTable,
 
     HomeTagline,
     HomeNewNote,

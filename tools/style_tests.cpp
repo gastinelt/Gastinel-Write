@@ -623,11 +623,139 @@ void test_markdown_import_structure() {
           "collage : bloc de code en texte brut");
 
     blocks = markdown_to_blocks("| a | b |\n|---|---|\n| 1 | 2 |");
-    check_equal(joined_texts(blocks), "a | b / 1 | 2", "collage : tableau aplati, separateur ignore");
+    check_equal(joined_texts(blocks), "a / b / 1 / 2", "collage : tableau en cellules, separateur ignore");
+    check(blocks.size() == 4 && blocks[0].in_table() && blocks[3].in_table() &&
+              blocks[0].table_id == blocks[3].table_id,
+          "collage : toutes les cellules partagent un tableau");
+    check(blocks[3].table_row == 1 && blocks[3].table_col == 1 && blocks[3].table_cols == 2,
+          "collage : position et largeur de la cellule 2 x 2");
+    check(!blocks[0].spans.empty() && blocks[0].spans[0].style.bold && blocks[2].spans.empty(),
+          "collage : premiere ligne en gras, les autres non");
 
     blocks = markdown_to_blocks("> citation\n\n---\n\nfin");
     check_equal(joined_texts(blocks), "citation /  / fin",
                 "collage : citation sans marqueur, regle en ligne vide");
+}
+
+void test_tables() {
+    // Document de depart : « ab », curseur entre les deux lettres. Le tableau
+    // 2 x 3 doit couper la ligne en « a », six cellules, puis « b ».
+    {
+        TextEdit edit;
+        edit.insert_text("ab");
+        edit.set_caret(Position{0, 1}, false);
+        edit.insert_table(2, 3);
+        const auto& p = edit.document().paragraphs();
+        check(p.size() == 8, "tableau : 2 x 3 insere entre « a » et « b »");
+        check_equal(p[0].text, "a", "tableau : tete de ligne conservee");
+        check_equal(p[7].text, "b", "tableau : queue de ligne placee apres le tableau");
+        check(edit.caret() == (Position{1, 0}) && edit.caret_in_table(),
+              "tableau : curseur dans la premiere cellule");
+        check(p[1].table_cols == 3 && p[6].table_row == 1 && p[6].table_col == 2,
+              "tableau : coordonnees des cellules");
+
+        edit.insert_text("x\ny");
+        check_equal(edit.document().paragraphs()[1].text, "x y",
+                    "tableau : retour a la ligne dans une cellule devient un espace");
+        check(edit.document().paragraphs().size() == 8, "tableau : la frappe ne coupe pas la grille");
+
+        edit.insert_paragraph_break();
+        check(edit.caret() == (Position{2, 0}) && edit.document().paragraphs().size() == 8,
+              "tableau : Entree passe a la cellule suivante");
+
+        edit.erase_backward(false);
+        check_equal(edit.document().paragraphs()[1].text, "x y",
+                    "tableau : retour arriere en debut de cellule ne fusionne rien");
+
+        edit.insert_text("zw");
+        edit.set_caret(Position{1, 1}, false);
+        edit.set_caret(Position{2, 1}, true);
+        edit.delete_selection();
+        check(edit.document().paragraphs().size() == 8 &&
+                  edit.document().paragraphs()[1].text == "x" &&
+                  edit.document().paragraphs()[2].text == "w",
+              "tableau : selection entre cellules vide chaque cellule sans les fusionner");
+
+        edit.set_caret(Position{1, 1}, false);
+        edit.erase_forward(false);
+        check(edit.document().paragraphs().size() == 8 &&
+                  edit.document().paragraphs()[1].text == "x",
+              "tableau : suppression en fin de cellule sans effet");
+
+        edit.set_caret(Position{6, 0}, false);
+        edit.move_cell(false);
+        check(edit.document().paragraphs().size() == 11 && edit.caret() == (Position{7, 0}),
+              "tableau : Tab dans la derniere cellule ajoute une ligne");
+
+        edit.undo();
+        check(edit.document().paragraphs().size() == 8,
+              "tableau : annulation de l ajout de ligne");
+    }
+    // Retour arriere juste apres un tableau, et suppression juste avant : rien
+    // ne se fusionne avec une cellule.
+    {
+        TextEdit edit;
+        edit.insert_text("ab");
+        edit.set_caret(Position{0, 1}, false);
+        edit.insert_table(1, 2);
+        const std::size_t after = edit.document().paragraphs().size() - 1;
+        edit.set_caret(Position{after, 0}, false);
+        edit.erase_backward(false);
+        check(edit.document().paragraphs().size() == 4 && edit.document().paragraphs()[after].text == "b" &&
+                  edit.caret() == (Position{after, 0}),
+              "tableau : retour arriere apres un tableau ne touche pas aux cellules");
+
+        edit.set_caret(Position{0, 1}, false);
+        edit.erase_forward(false);
+        check(edit.document().paragraphs()[0].text == "a" && edit.document().paragraphs().size() == 4,
+              "tableau : suppression avant un tableau ne touche pas aux cellules");
+    }
+
+    // Un tableau insere dans une cellule se place apres le tableau existant.
+    {
+        TextEdit edit;
+        edit.insert_table(1, 2);
+        edit.set_caret(Position{1, 0}, false);
+        edit.insert_table(1, 1);
+        const auto& p = edit.document().paragraphs();
+        check(p.size() == 6 && p[1].in_table() && p[2].in_table() && p[3].in_table() &&
+                  p[3].table_id != p[1].table_id,
+              "tableau : nouveau tableau jamais a l interieur d un autre");
+    }
+    // Suppression du tableau : seul le texte d en dehors reste.
+    {
+        TextEdit edit;
+        edit.insert_text("a");
+        edit.insert_paragraph_break();
+        edit.insert_text("b");
+        edit.set_caret(Position{0, 1}, false);
+        edit.insert_table(1, 1);
+        edit.set_caret(Position{1, 0}, false);
+        edit.delete_table();
+        const auto& p = edit.document().paragraphs();
+        // La ligne vide issue de la coupure reste : rien n est fusionne a la
+        // suppression, la ligne « a » et la ligne « b » gardent leur place.
+        check(p.size() == 3 && p[0].text == "a" && p[1].text.empty() && p[2].text == "b" &&
+                  !p[1].in_table(),
+              "tableau : suppression retire toutes les cellules sans toucher au texte");
+    }
+    // Un collage Markdown dans une cellule reste du texte a plat ; dans un
+    // paragraphe, il devient un tableau entre la tete et la queue.
+    {
+        TextEdit edit;
+        edit.insert_text("ab");
+        edit.set_caret(Position{0, 1}, false);
+        edit.insert_blocks(markdown_to_blocks("| a | b |\n|-|-|\n| 1 | 2 |"));
+        const auto& p = edit.document().paragraphs();
+        check(p.size() == 6 && p[0].text == "a" && p[5].text == "b" && !p[5].in_table(),
+              "tableau : collage Markdown dans un paragraphe");
+        check(edit.caret() == (Position{5, 0}), "tableau : curseur apres le tableau colle");
+
+        edit.set_caret(Position{1, 0}, false);
+        edit.insert_blocks(markdown_to_blocks("| x | y |\n|-|-|\n| 9 | 8 |"));
+        check(edit.document().paragraphs().size() == 6,
+              "tableau : collage dans une cellule ne cree aucun paragraphe");
+    }
 }
 
 void test_markdown_paste_into_document() {
@@ -679,6 +807,7 @@ int main() {
 
     test_markdown_import_structure();
     test_markdown_paste_into_document();
+    test_tables();
 
     std::printf("\n%s (%d echec%s)\n", failures == 0 ? "TOUT PASSE" : "DES TESTS ECHOUENT",
                 failures, failures > 1 ? "s" : "");

@@ -117,6 +117,26 @@ public:
     // suivait le curseur prend ceux du dernier bloc.
     void insert_blocks(std::vector<Paragraph> blocks);
     void insert_paragraph_break();
+
+    // --- Tableaux ----------------------------------------------------------
+    //
+    // Insere un tableau vide de `rows` x `cols` apres le curseur. Si le curseur
+    // est dans un paragraphe ordinaire, celui-ci est coupe en deux : la queue
+    // passe apres le tableau. Si le curseur est deja dans un tableau, le
+    // nouveau tableau se place apres celui-ci, jamais a l interieur. Le curseur
+    // se pose dans la premiere cellule.
+    void insert_table(std::size_t rows, std::size_t cols);
+    // Deplace le curseur a la cellule suivante (`backward` : precedente). Dans la
+    // derniere cellule, ajoute une ligne vide en fin de tableau, comme Tab dans
+    // un traitement de texte. Retourne faux si le curseur n est pas dans un
+    // tableau ou si la cellule precedente n existe pas.
+    bool move_cell(bool backward);
+    // Supprime le tableau qui contient le curseur. Si le document n a plus rien,
+    // il reste un paragraphe vide.
+    bool delete_table();
+    // Vrai si le curseur est dans une cellule de tableau.
+    bool caret_in_table() const;
+
     void erase_backward(bool by_word);
     void erase_forward(bool by_word);
     // Retourne faux s il n y avait rien a supprimer.
@@ -200,6 +220,10 @@ public:
     static constexpr std::size_t kMaxUndoDepth = 256;
 
 private:
+    // Vrai si aller a `target` franchirait la frontiere d une cellule. Sert aux
+    // suppressions, qui ne doivent jamais fusionner une cellule avec sa voisine.
+    bool crosses_table(Position target) const;
+
     struct Snapshot {
         std::vector<std::shared_ptr<const Paragraph>> paragraphs;
         Position caret;
