@@ -114,6 +114,12 @@ void FontSet::clear_registered_fonts() {
     cache_valid_ = false;
 }
 
+void FontSet::set_document_default(const std::string& display_name) {
+    if (display_name == document_default_) return;
+    document_default_ = display_name;
+    cache_valid_ = false;
+}
+
 FontSet::Imported* FontSet::resolve_imported(const std::string& display_name) {
     const auto it = imported_.find(display_name);
     if (it == imported_.end()) return nullptr;
@@ -144,10 +150,12 @@ FontFace FontSet::face(const std::string& family, bool bold, bool italic, float 
     const font::TtfFont* chosen = nullptr;
     std::string key_family;
 
-    if (!family.empty() && family != kBuiltInName) {
-        if (Imported* imported = resolve_imported(family)) {
+    // Une famille vide designe la police par defaut du document.
+    const std::string& wanted = family.empty() ? document_default_ : family;
+    if (!wanted.empty() && wanted != kBuiltInName) {
+        if (Imported* imported = resolve_imported(wanted)) {
             chosen = &imported->font;
-            key_family = family;
+            key_family = wanted;
         }
         // Introuvable ou illisible : on tombe sur Inter, sans le dire au
         // modele. Le document garde le nom demande — le fichier peut revenir.

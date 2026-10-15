@@ -77,6 +77,11 @@ public:
     void register_font(const std::string& display_name, const std::string& file_path);
     void clear_registered_fonts();
 
+    // Police par defaut du document : celle qu obtiennent les plages sans nom
+    // de police. Sans elle, choisir une police sans selection ne change rien a
+    // l ecran, puisque le texte existant et la frappe suivante restent sur Inter.
+    void set_document_default(const std::string& display_name);
+
     // Variante a utiliser pour une plage de texte.
     //
     // `family` est un nom daffichage ; vide, inconnu ou illisible retombe sur
@@ -115,6 +120,7 @@ private:
 
     // Cache mono-entree ultra-rapide pour eviter toute allocation a la frappe.
     bool cache_valid_ = false;
+    std::string document_default_;
     bool cache_bold_ = false;
     bool cache_italic_ = false;
     int cache_size_key_ = 0;

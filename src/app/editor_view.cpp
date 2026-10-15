@@ -294,6 +294,7 @@ int cell_line_top(const TableCell& cell, std::size_t index) {
 
 void EditorView::layout(const doc::TextEdit& edit, int width, int height, int top_offset,
                         int inset, FontSet& fonts, float body_size) {
+    fonts.set_document_default(edit.document().default_font());
     const FontFace body = fonts.face(std::string(), false, false, body_size);
 
     line_height_ = std::max(1, render::line_height(*body.font, body_size));
@@ -861,6 +862,7 @@ bool EditorView::step_animation(float dt) {
 void EditorView::draw(render::Framebuffer& fb, const doc::TextEdit& edit, FontSet& fonts,
                       float body_size, bool caret_visible) const {
     if (lines_.empty()) return;
+    fonts.set_document_default(edit.document().default_font());
 
     const Theme& palette = theme();
     const auto& paragraphs = edit.document().paragraphs();
