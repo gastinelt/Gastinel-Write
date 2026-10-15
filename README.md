@@ -1679,3 +1679,11 @@ quel. La question ne se pose plus pour le portage. Cf. *Décompression*.
 Windows 7/8 et Linux ne sont pas ciblés. Le code évite les API strictement
 Win10+ sans raison et `platform/` reste le principal point de portage, mais
 rien n'a été développé ni testé pour ces cibles.
+
+---
+
+## Licence du code
+
+Le code de Gastinel Write est publié sous licence **GNU GPL v3.0** (voir le fichier `LICENSE`).
+Vous pouvez l'utiliser, l'étudier, le modifier et le redistribuer, à condition que toute version
+redistribuée reste sous la même licence et que son code source soit fourni.
