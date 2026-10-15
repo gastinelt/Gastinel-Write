@@ -110,6 +110,12 @@ public:
     // Toutes suppriment d abord la selection s il y en a une, comme partout
     // ailleurs : taper avec du texte selectionne le remplace.
     void insert_text(const std::string& utf8);
+    // Insere des paragraphes deja construits (collage Markdown). Le premier
+    // commence a la ligne du curseur, le texte apres le curseur est recolle au
+    // dernier : c est le comportement d une frappe qui ferait une fin de ligne.
+    // Les attributs de paragraphe de `blocks` sont conserves ; le texte qui
+    // suivait le curseur prend ceux du dernier bloc.
+    void insert_blocks(std::vector<Paragraph> blocks);
     void insert_paragraph_break();
     void erase_backward(bool by_word);
     void erase_forward(bool by_word);

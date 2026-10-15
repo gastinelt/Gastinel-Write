@@ -466,6 +466,42 @@ void TextEdit::insert_text(const std::string& utf8) {
     document_.set_dirty(true);
 }
 
+void TextEdit::insert_blocks(std::vector<Paragraph> blocks) {
+    if (blocks.empty()) return;
+    // Meme regle que insert_text : un collage ferme le groupe d annulation.
+    push_undo(EditKind::Other);
+    delete_selection();
+
+    auto& paragraphs = document_.paragraphs();
+    // La queue, c est ce qui suivait le curseur dans sa ligne. Elle est recollee
+    // au dernier bloc a la fin, donc elle ne garde pas ses attributs.
+    Paragraph tail = paragraph_split(paragraphs[caret_.paragraph], caret_.offset);
+
+    // Une ligne vide ou le curseur se trouve en debut de paragraphe est remplacee
+    // par les blocs, sans laisser une ligne vide en trop au-dessus.
+    std::size_t first = caret_.paragraph + 1;
+    if (paragraphs[caret_.paragraph].text.empty()) {
+        paragraphs.erase(paragraphs.begin() + static_cast<std::ptrdiff_t>(caret_.paragraph));
+        first = caret_.paragraph;
+    }
+
+    const std::size_t count = blocks.size();
+    paragraphs.insert(paragraphs.begin() + static_cast<std::ptrdiff_t>(first),
+                      std::make_move_iterator(blocks.begin()),
+                      std::make_move_iterator(blocks.end()));
+
+    const std::size_t last = first + count - 1;
+    Paragraph& tail_host = paragraphs[last];
+    const std::size_t join = tail_host.text.size();
+    paragraph_append(tail_host, tail);
+
+    caret_ = Position{last, join};
+    anchor_ = caret_;
+    pending_style_.reset();
+    last_edit_end_ = caret_;
+    document_.set_dirty(true);
+}
+
 void TextEdit::insert_paragraph_break() {
     // EditKind::Other : une nouvelle ligne ferme le groupe d annulation en
     // cours. Ctrl+Z apres un paragraphe tape entier remonte au debut de ce

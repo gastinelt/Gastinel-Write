@@ -18,6 +18,7 @@
 //
 // Usage : gw_style_tests
 #include "doc/document.h"
+#include "doc/markdown_import.h"
 #include "doc/markdown_live.h"
 #include "doc/style.h"
 #include "doc/text_edit.h"
@@ -53,6 +54,8 @@ using gw::doc::Paragraph;
 using gw::doc::Position;
 using gw::doc::StyleSpan;
 using gw::doc::TextEdit;
+using gw::doc::markdown_to_blocks;
+using gw::doc::style_at;
 
 // Representation lisible d un paragraphe stylise : le texte decoupe plage par
 // plage, chaque plage prefixee de ses attributs.
@@ -576,6 +579,77 @@ void test_markdown_only_runs_when_asked() {
                 "mode barre d outils : la syntaxe reste du texte");
 }
 
+// --- Collage Markdown (doc/markdown_import) ---------------------------------
+
+// Textes des paragraphes, separes par « / », pour comparer une liste en un coup.
+std::string joined_texts(const std::vector<Paragraph>& paragraphs) {
+    std::string out;
+    for (std::size_t i = 0; i < paragraphs.size(); ++i) {
+        if (i > 0) out += " / ";
+        out += paragraphs[i].text;
+    }
+    return out;
+}
+
+void test_markdown_import_structure() {
+    auto blocks = markdown_to_blocks("# Titre\n## Sous\n### Trois\n#### Quatre");
+    check_equal(joined_texts(blocks), "Titre / Sous / Trois / Quatre",
+                "collage : titres, niveaux 1 a 4");
+    check(blocks[0].heading == HeadingLevel::H1 && blocks[1].heading == HeadingLevel::H2 &&
+              blocks[2].heading == HeadingLevel::H3 && blocks[3].heading == HeadingLevel::H3,
+          "collage : # H1, ## H2, ### et au-dela H3");
+
+    blocks = markdown_to_blocks("- a\n* b\n1. c\n2) d");
+    check_equal(joined_texts(blocks), "a / b / c / d", "collage : listes a puces et numerotees");
+    check(blocks[1].list == ListKind::Bullet && blocks[2].list == ListKind::Numbered &&
+              blocks[3].list == ListKind::Numbered,
+          "collage : types de liste");
+
+    blocks = markdown_to_blocks("Un **gras** et *ital* et `code` [lien](http://x)");
+    check_equal(blocks[0].text, "Un gras et ital et code lien",
+                "collage : marqueurs retires, lien reduit a son texte");
+    check(style_at(blocks[0].spans, 3).bold && !style_at(blocks[0].spans, 0).bold,
+          "collage : gras sur « gras »");
+    check(style_at(blocks[0].spans, 11).italic && !style_at(blocks[0].spans, 7).italic,
+          "collage : italique sur « ital »");
+
+    blocks = markdown_to_blocks("nom_de_variable et 3 * 4 * 5");
+    check_equal(blocks[0].text, "nom_de_variable et 3 * 4 * 5",
+                "collage : formes douteuses laissees telles quelles");
+    check(blocks[0].spans.empty(), "collage : aucune emphase dans les formes douteuses");
+
+    blocks = markdown_to_blocks("```\n**brut**\n```");
+    check(blocks.size() == 1 && blocks[0].text == "**brut**" && blocks[0].is_plain(),
+          "collage : bloc de code en texte brut");
+
+    blocks = markdown_to_blocks("| a | b |\n|---|---|\n| 1 | 2 |");
+    check_equal(joined_texts(blocks), "a | b / 1 | 2", "collage : tableau aplati, separateur ignore");
+
+    blocks = markdown_to_blocks("> citation\n\n---\n\nfin");
+    check_equal(joined_texts(blocks), "citation /  / fin",
+                "collage : citation sans marqueur, regle en ligne vide");
+}
+
+void test_markdown_paste_into_document() {
+    TextEdit edit;
+    edit.insert_text("ab");
+    edit.set_caret(Position{0, 1}, false);
+    edit.insert_blocks(markdown_to_blocks("**x**\n- y"));
+
+    const auto& paragraphs = edit.document().paragraphs();
+    check(paragraphs.size() == 3, "collage dans le document : trois paragraphes");
+    if (paragraphs.size() == 3) {
+        check_equal(joined_texts(paragraphs), "a / x / yb",
+                    "collage dans le document : « a », les blocs, puis la queue recollee");
+        check(style_at(paragraphs[1].spans, 0).bold,
+              "collage dans le document : « x » garde son gras");
+        check(paragraphs[2].list == ListKind::Bullet,
+              "collage dans le document : la puce du dernier bloc est conservee");
+        check(edit.caret().paragraph == 2 && edit.caret().offset == 1,
+              "collage dans le document : curseur apres « y »");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -602,6 +676,9 @@ int main() {
     test_markdown_undo_restores_markers();
     test_markdown_and_toolbar_produce_the_same_model();
     test_markdown_only_runs_when_asked();
+
+    test_markdown_import_structure();
+    test_markdown_paste_into_document();
 
     std::printf("\n%s (%d echec%s)\n", failures == 0 ? "TOUT PASSE" : "DES TESTS ECHOUENT",
                 failures, failures > 1 ? "s" : "");

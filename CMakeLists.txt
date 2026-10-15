@@ -74,6 +74,7 @@ add_executable(gastinel_write WIN32
     src/doc/text_edit.cpp
     src/doc/style.cpp
     src/doc/markdown_live.cpp
+    src/doc/markdown_import.cpp
     src/doc/zip.cpp
     src/doc/file_bytes.cpp
 )
@@ -166,6 +167,7 @@ add_executable(gw_edit_tests
     src/doc/text_edit.cpp
     src/doc/style.cpp
     src/doc/markdown_live.cpp
+    src/doc/markdown_import.cpp
     src/compress/compress_lz.cpp
 )
 target_include_directories(gw_edit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -185,6 +187,7 @@ add_executable(gw_style_tests
     src/doc/style.cpp
     src/doc/text_edit.cpp
     src/doc/markdown_live.cpp
+    src/doc/markdown_import.cpp
     src/compress/compress_lz.cpp
 )
 target_include_directories(gw_style_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -250,6 +253,7 @@ add_executable(gw_screen_render
     src/doc/text_edit.cpp
     src/doc/style.cpp
     src/doc/markdown_live.cpp
+    src/doc/markdown_import.cpp
     src/compress/compress_lz.cpp
     src/platform/system.cpp
     src/platform/unicode.cpp
@@ -283,6 +287,7 @@ add_executable(gw_feature_tests
     src/doc/text_edit.cpp
     src/doc/style.cpp
     src/doc/markdown_live.cpp
+    src/doc/markdown_import.cpp
     src/compress/compress_lz.cpp
     src/platform/system.cpp
     src/platform/unicode.cpp

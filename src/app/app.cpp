@@ -3,6 +3,7 @@
 #include "app/quotes.h"
 #include "app/splash.h"
 #include "app/theme.h"
+#include "doc/markdown_import.h"
 #include "doc/odt_io.h"
 #include "doc/txt_io.h"
 #include "platform/clipboard.h"
@@ -921,7 +922,18 @@ void App::copy_selection(bool cut) {
 void App::paste_clipboard() {
     std::string text;
     if (!platform::clipboard_get_text(text) || text.empty()) return;
-    editor_.insert_text(text);
+
+    // Un texte colle est lu comme du Markdown complet : titres, listes, gras,
+    // italique, liens... Un texte sans aucune syntaxe ressort identique et reste
+    // sur le chemin de frappe d origine, avec le style arme eventuel.
+    std::vector<doc::Paragraph> blocks = doc::markdown_to_blocks(text);
+    const bool plain_text = blocks.size() == 1 && blocks[0].is_plain() &&
+                            blocks[0].text.size() == text.size();
+    if (plain_text) {
+        editor_.insert_text(text);
+    } else {
+        editor_.insert_blocks(std::move(blocks));
+    }
     after_edit();
 }
 
