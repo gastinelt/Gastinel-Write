@@ -1,0 +1,11 @@
+# Fins de ligne normalisees en LF dans le depot, quelle que soit la machine
+# qui commite. Sans cela, un contributeur sous Windows produirait des diffs
+# entiers a chaque fichier touche.
+* text=auto eol=lf
+
+# Binaires : aucune conversion, sous peine de corruption.
+*.png binary
+*.ttf binary
+
+# PowerShell : CRLF dans la copie de travail, par convention Windows.
+*.ps1 text eol=crlf

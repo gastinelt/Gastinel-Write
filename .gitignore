@@ -68,3 +68,8 @@ id_ed25519*
 *.mkv
 *.wav
 *.flac
+
+# Installeur
+*.msi
+*.wixobj
+*.wixpdb
