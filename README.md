@@ -15,6 +15,10 @@ Markdown légère se rend en direct au fil de la frappe. Une **barre de menu**
 (Fichier / Édition / Affichage) donne l'accès classique aux mêmes commandes que
 les raccourcis clavier.
 
+Un texte colle est lu comme du **Markdown complet** : titres, listes, gras,
+italique, liens, code, citations et tableaux deviennent du formatage réel
+(cf. *Collage Markdown* dans `docs/notes-techniques.md`).
+
 ---
 
 ## Compilation

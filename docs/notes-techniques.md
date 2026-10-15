@@ -976,6 +976,56 @@ la dernière ligne reste numérotée par héritage.
 
 ---
 
+## Collage Markdown
+
+Un texte colle est lu comme du Markdown complet, sans reglage : titres,
+listes, gras, italique, liens, code, citations et tableaux deviennent de vrais
+paragraphes et de vraies plages de style. Un texte sans aucune syntaxe ressort
+identique et reste sur le chemin de frappe d origine.
+
+### Le module pur `doc/markdown_import`
+
+`markdown_to_blocks(texte)` rend une liste de `doc::Paragraph`, sans Win32 ni
+rendu. Il ne construit pas d arbre : une passe par ligne decide de la structure
+(titre, liste, citation, bloc de code, ligne de tableau), puis une passe par
+segment decoupe le texte en ligne. Chaque segment est pose par
+`paragraph_insert` avec son style impose, donc les plages gardent les
+invariants de `doc/style.h` sans acces direct au texte.
+
+| Forme | Resultat |
+|---|---|
+| `#`, `##`, `###` et au-dela | H1, H2, H3 (au-dela : H3) |
+| `-`, `*`, `+` en tete | puce |
+| `1.`, `1)` en tete | liste numerotee |
+| `**gras**`, `__gras__` | gras |
+| `*italique*`, `_italique_` | italique |
+| `` `code` ``, `~~barre~~`, `[texte](url)`, `![alt](url)` | texte seul |
+| `> citation` | texte seul, sans le marqueur |
+| bloc entre ``` ou ~~~ | lignes en texte brut |
+| `---` | ligne vide |
+| tableau `\|a\|b\|` | une cellule par paragraphe ; la premiere ligne est en gras |
+
+Les formes douteuses restent du texte, comme dans `doc/markdown_live` : un `_`
+au milieu d un mot, un `*` sans fermeture, une etoile bordee d espaces. Le
+cout d un faux positif (du texte qui disparait) reste plus grave que celui
+d un faux negatif (un marqueur de trop).
+
+### Insertion : `TextEdit::insert_blocks`
+
+Le premier bloc commence a la ligne du curseur. Le texte qui suivait le curseur
+est recolle au dernier bloc, et ses attributs de paragraphe sont perdus : c est
+la regle de la fusion par retour arriere. Si le curseur est en debut de ligne
+vide, cette ligne est remplacee. L insertion passe par `push_undo` : un Ctrl+Z
+annule tout le collage.
+
+### Verification
+
+`gw_style_tests` couvre la structure (titres, listes, emphases, bloc de code,
+tableau, citation et regle), et l insertion dans un document (queue recollee,
+gras conserve, puce du dernier bloc, curseur). Le chemin Win32 du presse-papiers
+n est pas couvert par un banc : il se verifie en collant un texte dans
+l application.
+
 ## Menu principal
 
 ### Une bande de titres, pas un menu
